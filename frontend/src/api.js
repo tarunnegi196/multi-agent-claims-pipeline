@@ -36,6 +36,48 @@ export async function uploadFile(file) {
 }
 
 /**
+ * Subscribe to the LIVE trace stream for a claim that is currently processing.
+ * Connect BEFORE calling submitClaim so events arrive in real time.
+ * Returns a cleanup function that closes the EventSource.
+ */
+export function streamLiveTrace(claimId, { onEvent, onDone, onError }) {
+  const base = import.meta.env.VITE_API_URL || ''
+  const es = new EventSource(`${base}/api/claims/${claimId}/trace`)
+
+  es.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data)
+      if (data.done) { es.close(); onDone?.() }
+      else if (data.error) { es.close(); onError?.(data.error) }
+      else { onEvent?.(data) }
+    } catch { /* ignore malformed */ }
+  }
+  es.onerror = () => { es.close(); onError?.('SSE connection failed') }
+  return () => es.close()
+}
+
+/**
+ * Returns the URL to display an uploaded file (for <img src> or <object>).
+ * No network call — just constructs the URL.
+ */
+export function getFileUrl(fileId) {
+  const base = import.meta.env.VITE_API_URL || ''
+  return `${base}/api/files/${fileId}`
+}
+
+/**
+ * Fetch bounding-box regions for an uploaded document.
+ * Completely separate from the claim pipeline — only called on user request.
+ * Returns {file_id, doc_type, regions: [{field, value, bbox, category}]}
+ */
+export async function getDocumentRegions(fileId, docType = 'UNKNOWN') {
+  const base = import.meta.env.VITE_API_URL || ''
+  const res = await fetch(`${base}/api/files/${fileId}/regions?doc_type=${docType}`)
+  if (!res.ok) throw new Error(`Regions fetch failed: ${res.status}`)
+  return res.json()
+}
+
+/**
  * Stream replayed trace events for a completed claim.
  * Returns a cleanup function that closes the EventSource.
  */

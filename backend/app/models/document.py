@@ -25,6 +25,16 @@ class LineItem(BaseModel):
     amount: float
 
 
+class MedicineDetail(BaseModel):
+    """Structured per-medicine row from pharmacy bills."""
+    name: str
+    batch: Optional[str] = None
+    expiry: Optional[str] = None
+    quantity: Optional[int] = None
+    mrp: Optional[float] = None
+    amount: Optional[float] = None
+
+
 class ClassifiedDoc(BaseModel):
     """Output of DocumentClassifierAgent — one entry per uploaded file."""
     file_id: str
@@ -42,29 +52,61 @@ class ExtractedDoc(BaseModel):
     """
     file_id: str
     document_type: DocumentType
-    # Shared
+
+    # ── Shared ────────────────────────────────────────────────────────────────
     patient_name: Optional[str] = None
+    patient_age: Optional[str] = None
+    patient_gender: Optional[str] = None
     date: Optional[str] = None
-    # Prescription
+
+    # ── Prescription ──────────────────────────────────────────────────────────
     doctor_name: Optional[str] = None
+    doctor_specialization: Optional[str] = None
     doctor_registration: Optional[str] = None
+    chief_complaint: Optional[str] = None
     diagnosis: Optional[str] = None
     medicines: list[str] = []
+    medicine_details: list[MedicineDetail] = []
     tests_ordered: list[str] = []
-    # Bill
+
+    # ── Hospital bill / clinic invoice ────────────────────────────────────────
     hospital_name: Optional[str] = None
+    hospital_address: Optional[str] = None
+    gstin: Optional[str] = None
     bill_number: Optional[str] = None
     line_items: list[LineItem] = []
+    subtotal_amount: Optional[float] = None
+    discount_amount: Optional[float] = None
     total_amount: Optional[float] = None
-    # Lab report
+    payment_mode: Optional[str] = None
+
+    # ── Pharmacy bill ─────────────────────────────────────────────────────────
+    pharmacy_name: Optional[str] = None
+    drug_license_number: Optional[str] = None
+    net_amount: Optional[float] = None
+
+    # ── Lab / diagnostic report ───────────────────────────────────────────────
     lab_name: Optional[str] = None
+    lab_id: Optional[str] = None
+    nabl_accredited: Optional[bool] = None
+    sample_date: Optional[str] = None
+    report_date: Optional[str] = None
+    sample_id: Optional[str] = None
+    pathologist_name: Optional[str] = None
+    pathologist_registration: Optional[str] = None
     test_results: dict[str, str] = {}
-    # Extraction metadata
+
+    # ── Document quality signals ──────────────────────────────────────────────
+    language_detected: Optional[str] = None
+    quality_flags: list[str] = []
+    document_alteration_detected: bool = False
+    duplicate_stamp_detected: bool = False
+
+    # ── Extraction metadata ───────────────────────────────────────────────────
     extraction_method: str = "gemini_vision"
     overall_confidence: float = 1.0
     field_confidence: dict[str, float] = {}
     unextracted_fields: list[str] = []
-    # Fraud-relevant signals from the document itself
     flags: list[str] = []
 
 
@@ -76,19 +118,57 @@ class FusedDoc(BaseModel):
     """
     file_id: str
     document_type: DocumentType
+
+    # ── Shared ────────────────────────────────────────────────────────────────
     patient_name: Optional[str] = None
+    patient_age: Optional[str] = None
+    patient_gender: Optional[str] = None
     date: Optional[str] = None
+
+    # ── Prescription ──────────────────────────────────────────────────────────
     doctor_name: Optional[str] = None
+    doctor_specialization: Optional[str] = None
     doctor_registration: Optional[str] = None
+    chief_complaint: Optional[str] = None
     diagnosis: Optional[str] = None
     medicines: list[str] = []
+    medicine_details: list[MedicineDetail] = []
     tests_ordered: list[str] = []
+
+    # ── Hospital bill ─────────────────────────────────────────────────────────
     hospital_name: Optional[str] = None
+    hospital_address: Optional[str] = None
+    gstin: Optional[str] = None
+    bill_number: Optional[str] = None
     line_items: list[LineItem] = []
+    subtotal_amount: Optional[float] = None
+    discount_amount: Optional[float] = None
     total_amount: Optional[float] = None
+    payment_mode: Optional[str] = None
+
+    # ── Pharmacy ──────────────────────────────────────────────────────────────
+    pharmacy_name: Optional[str] = None
+    drug_license_number: Optional[str] = None
+    net_amount: Optional[float] = None
+
+    # ── Lab / diagnostic ──────────────────────────────────────────────────────
     lab_name: Optional[str] = None
+    lab_id: Optional[str] = None
+    nabl_accredited: Optional[bool] = None
+    sample_date: Optional[str] = None
+    report_date: Optional[str] = None
+    sample_id: Optional[str] = None
+    pathologist_name: Optional[str] = None
+    pathologist_registration: Optional[str] = None
     test_results: dict[str, str] = {}
-    # Fusion metadata
+
+    # ── Quality signals ───────────────────────────────────────────────────────
+    language_detected: Optional[str] = None
+    quality_flags: list[str] = []
+    document_alteration_detected: bool = False
+    duplicate_stamp_detected: bool = False
+
+    # ── Fusion metadata ───────────────────────────────────────────────────────
     overall_confidence: float = 1.0
     field_confidence: dict[str, float] = {}
     low_confidence_fields: list[str] = []

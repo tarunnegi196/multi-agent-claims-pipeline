@@ -4,7 +4,7 @@ import PipelineGraph from '../components/PipelineGraph'
 import ClaimForm     from '../components/ClaimForm'
 import TraceLog      from '../components/TraceLog'
 import DecisionCard  from '../components/DecisionCard'
-import { submitClaim, getClaim, replayTrace } from '../api'
+import { submitClaim, getClaim, replayTrace, streamLiveTrace } from '../api'
 
 const AGENTS = ['IntakeAgent','DocClassifierAgent','DocVerifierAgent','ExtractionAgent','FraudScreenAgent','DecisionComposerAgent']
 const IDLE_STATES = Object.fromEntries(AGENTS.map((a) => [a, 'idle']))
@@ -209,7 +209,8 @@ export default function SubmitPage() {
   const [currentAgent,  setCurrent]     = useState(null)
   const [replayActive,  setReplayActive]= useState(false)
   const [selectedAgent, setSelected]   = useState(null)
-  const cleanupRef = useRef(null)
+  const cleanupRef   = useRef(null)
+  const skipReplayRef = useRef(false) // true when live SSE already updated the graph
 
   const loadAndReplay = useCallback(async (claimId, preloaded = null) => {
     let data = preloaded
@@ -242,20 +243,66 @@ export default function SubmitPage() {
   }, [])
 
   useEffect(() => {
-    if (routeId) loadAndReplay(routeId)
+    // Skip replay when live SSE already updated the graph (fresh submission)
+    if (routeId && !skipReplayRef.current) loadAndReplay(routeId)
+    skipReplayRef.current = false
     return () => cleanupRef.current?.()
   }, [routeId, loadAndReplay])
 
   async function handleSubmit(payload) {
+    // Generate claim ID client-side so we can subscribe to the live SSE stream
+    // before the POST reaches the server — this is the key to real-time agent updates.
+    const claimId = crypto.randomUUID()
+
+    cleanupRef.current?.()
     setSubmitting(true); setError(null); setResult(null)
     setAllEvents([]); setNodeStates(IDLE_STATES); setNodeEvents(IDLE_EVENTS)
-    setCurrent(null); setSelected(null); cleanupRef.current?.()
+    setCurrent(null); setSelected(null)
+
+    // 1. Subscribe to live SSE FIRST
+    const sseCleanup = streamLiveTrace(claimId, {
+      onEvent(evt) {
+        setAllEvents((p) => [...p, evt])
+        setCurrent(evt.agent)
+        setNodeEvents((p) => ({ ...p, [evt.agent]: [...(p[evt.agent] || []), evt] }))
+        // Show fail/warn immediately; keep 'active' for in-progress PASS events
+        const evtStatus = deriveStatus(evt.status)
+        setNodeStates((p) => ({
+          ...p,
+          [evt.agent]: evtStatus === 'fail' || evtStatus === 'warn' ? evtStatus : 'active',
+        }))
+      },
+      onDone() {
+        // Finalize all agent statuses from the accumulated events
+        setAllEvents((prev) => {
+          const final = { ...IDLE_STATES }
+          prev.forEach((e) => {
+            const s = deriveStatus(e.status)
+            const cur = final[e.agent]
+            if (s === 'fail') final[e.agent] = 'fail'
+            else if (s === 'warn' && cur !== 'fail') final[e.agent] = 'warn'
+            else if (s === 'pass' && cur !== 'fail' && cur !== 'warn') final[e.agent] = 'pass'
+          })
+          setNodeStates(final)
+          return prev
+        })
+        setCurrent(null)
+      },
+      onError() { /* non-fatal — HTTP response still carries the result */ },
+    })
+    cleanupRef.current = sseCleanup
+
     try {
-      const data = await submitClaim(payload)
+      // 2. Submit — pipeline runs server-side while SSE pushes events to us
+      const data = await submitClaim({ ...payload, claim_id: claimId })
+      setResult(data)
+      // 3. Navigate to the claim URL; tell the useEffect not to trigger a replay
+      //    since the graph is already live-updated
+      skipReplayRef.current = true
       navigate(`/claims/${data.claim_id}`, { replace: true })
-      await loadAndReplay(data.claim_id, data)
     } catch (e) {
       setError(e.message)
+      sseCleanup()
     } finally {
       setSubmitting(false)
     }
@@ -315,7 +362,19 @@ export default function SubmitPage() {
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {replayActive && (
+            {isSubmitting && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11,
+                background: 'rgba(146,189,51,0.08)', border: '1px solid rgba(146,189,51,0.3)',
+                borderRadius: 30, padding: '4px 12px', color: '#92bd33' }}>
+                <svg style={{ animation: '0.7s linear infinite spin', width: 10, height: 10, flexShrink: 0 }}
+                  viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" strokeOpacity="0.25"/>
+                  <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.37 0 0 5.37 0 12h4z"/>
+                </svg>
+                Pipeline running…
+              </span>
+            )}
+            {replayActive && !isSubmitting && (
               <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11,
                 background: 'rgba(123,64,103,0.12)', border: '1px solid #460932', borderRadius: 30,
                 padding: '3px 10px', color: '#bea0b3' }}>
@@ -324,7 +383,7 @@ export default function SubmitPage() {
                 Replaying…
               </span>
             )}
-            {result && !replayActive && (
+            {result && !replayActive && !isSubmitting && (
               <button onClick={() => loadAndReplay(result.claim_id, result)}
                 className="btn-action" style={{ fontFamily: 'Inter, Arial, sans-serif' }}>
                 ↻ Replay
@@ -336,24 +395,7 @@ export default function SubmitPage() {
         {/* Pipeline graph — full remaining height */}
         <div style={{ flex: 1, position: 'relative', minHeight: 200 }}>
 
-          {/* Submitting overlay */}
-          {isSubmitting && (
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
-              justifyContent: 'center', zIndex: 20, background: 'rgba(17,4,13,0.9)' }}>
-              <div style={{ background: '#1d0716', border: '1px solid #460932', borderRadius: 16,
-                padding: '24px 32px', textAlign: 'center', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
-                <svg style={{ animation: '0.8s linear infinite spin', width: 36, height: 36,
-                  display: 'block', margin: '0 auto 10px' }} viewBox="0 0 48 48" fill="none">
-                  <circle cx="24" cy="24" r="20" stroke="#340926" strokeWidth="4" />
-                  <path d="M24 4a20 20 0 0120 20" stroke="#7b4067" strokeWidth="4" strokeLinecap="round" />
-                </svg>
-                <p style={{ color: '#d8c5d1', fontWeight: 700, fontSize: 13, margin: '0 0 4px' }}>Running pipeline…</p>
-                <p style={{ color: '#9e708c', fontSize: 11, margin: 0 }}>LLM extraction may take 10–20 s</p>
-              </div>
-            </div>
-          )}
-
-          <PipelineGraph
+            <PipelineGraph
             nodeStates={displayStates} nodeEvents={nodeEvents}
             selectedAgent={selectedAgent}
             onNodeClick={(agent) => setSelected((p) => p === agent ? null : agent)}

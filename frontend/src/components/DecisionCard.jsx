@@ -1,3 +1,6 @@
+import { useState } from 'react'
+import DocumentRegionViewer from './DocumentRegionViewer'
+
 /* Plum exact brand colours */
 const DECISION_META = {
   APPROVED:      { color: '#92bd33', bg: 'rgba(146,189,51,0.08)', border: 'rgba(146,189,51,0.25)', icon: '✓', label: 'Approved'     },
@@ -40,8 +43,10 @@ function AmountRow({ label, value, isFinal = false, deduction = false }) {
 }
 
 export default function DecisionCard({ result, processingMs }) {
+  const [regionViewer, setRegionViewer] = useState(null) // {fileId, docType, fileName}
+
   if (!result) return null
-  const { decision, claim_id, member_id, claim_category, degraded_components } = result
+  const { decision, claim_id, member_id, claim_category, degraded_components, documents } = result
   const meta = DECISION_META[decision.decision_type] || DECISION_META.MANUAL_REVIEW
   const bd   = decision.amount_breakdown
 
@@ -163,11 +168,76 @@ export default function DecisionCard({ result, processingMs }) {
         </div>
       )}
 
+      {/* Documents processed — "View regions" only for real uploaded files */}
+      {documents?.length > 0 && (
+        <div style={panelStyle}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#9e708c',
+            textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+            Documents Processed
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {documents.map((doc) => (
+              <div key={doc.file_id} style={{
+                display: 'flex', alignItems: 'center',
+                justifyContent: 'space-between', gap: 8,
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  <span style={{
+                    fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
+                    background: 'rgba(190,160,179,0.1)', border: '1px solid #460932',
+                    color: '#bea0b3', textTransform: 'uppercase', letterSpacing: '0.05em',
+                    marginRight: 6, whiteSpace: 'nowrap',
+                  }}>
+                    {doc.doc_type}
+                  </span>
+                  <span style={{ fontSize: 11, color: '#9e708c',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {doc.file_name}
+                  </span>
+                </div>
+
+                {doc.viewable ? (
+                  <button
+                    onClick={() => setRegionViewer({ fileId: doc.file_id, docType: doc.doc_type, fileName: doc.file_name })}
+                    title="View extracted regions in this document"
+                    style={{
+                      flexShrink: 0,
+                      display: 'flex', alignItems: 'center', gap: 4,
+                      background: 'rgba(74,144,226,0.08)', border: '1px solid rgba(74,144,226,0.28)',
+                      borderRadius: 99, padding: '3px 10px', cursor: 'pointer',
+                      fontSize: 10, fontWeight: 700, color: '#4a90e2',
+                      transition: 'background 0.1s, border-color 0.1s',
+                      fontFamily: 'Inter, Arial, sans-serif', whiteSpace: 'nowrap',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = 'rgba(74,144,226,0.18)'; e.currentTarget.style.borderColor = 'rgba(74,144,226,0.55)' }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'rgba(74,144,226,0.08)'; e.currentTarget.style.borderColor = 'rgba(74,144,226,0.28)' }}
+                  >
+                    &#9681; Regions
+                  </button>
+                ) : (
+                  <span style={{ fontSize: 10, color: '#340926', flexShrink: 0 }}>stub</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Footer */}
       {processingMs != null && (
         <div style={{ fontSize: 11, textAlign: 'right', color: '#9e708c' }}>
           {(processingMs / 1000).toFixed(1)}s · {result.trace?.length ?? 0} trace events
         </div>
+      )}
+
+      {/* Region viewer — opened on user request, tied to this claim's processed documents */}
+      {regionViewer && (
+        <DocumentRegionViewer
+          fileId={regionViewer.fileId}
+          docType={regionViewer.docType}
+          fileName={regionViewer.fileName}
+          onClose={() => setRegionViewer(null)}
+        />
       )}
     </div>
   )

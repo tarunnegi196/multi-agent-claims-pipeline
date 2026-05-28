@@ -29,7 +29,7 @@ from app.db.repositories import ClaimRepository, TraceRepository
 from app.graph import claims_graph
 from app.logging_config import setup_logging
 from app.models.claim import ClaimSubmission
-from app.models.decision import Decision, DecisionType, FinalOutput, RejectionReason
+from app.models.decision import Decision, DecisionType, DocumentSummary, FinalOutput, RejectionReason
 from app.models.graph_state import GraphState
 
 logger = logging.getLogger(__name__)
@@ -124,7 +124,7 @@ def _build_halt_decision(claim: ClaimSubmission, halt_message: str,
 
 @app.post("/api/claims", response_model=FinalOutput)
 async def submit_claim(claim: ClaimSubmission) -> FinalOutput:
-    claim_id = str(uuid.uuid4())
+    claim_id = claim.claim_id or str(uuid.uuid4())
     t0 = time.time()
 
     logger.info(
@@ -168,6 +168,21 @@ async def submit_claim(claim: ClaimSubmission) -> FinalOutput:
     if decision is None:
         decision = _build_halt_decision(claim, halt_message, intake_ok)
 
+    # Build doc summaries: use Gemini-classified type where available, fall back to actual_type
+    classified_map = {
+        c.file_id: c.document_type.value
+        for c in result.get("classified_docs", [])
+    }
+    doc_summaries = [
+        DocumentSummary(
+            file_id=d.file_id,
+            file_name=d.file_name,
+            doc_type=classified_map.get(d.file_id) or d.actual_type or "UNKNOWN",
+            viewable=bool(d.file_path),
+        )
+        for d in claim.documents
+    ]
+
     output = FinalOutput(
         claim_id=claim_id,
         member_id=claim.member_id,
@@ -179,6 +194,7 @@ async def submit_claim(claim: ClaimSubmission) -> FinalOutput:
         processing_time_ms=elapsed,
         pipeline_complete=not halt,
         degraded_components=result.get("failed_components", []),
+        documents=doc_summaries,
     )
 
     logger.info(
