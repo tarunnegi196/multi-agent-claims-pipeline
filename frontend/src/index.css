@@ -1,0 +1,77 @@
+@import '@xyflow/react/dist/style.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base ──────────────────────────────────────────────────────── */
+:root {
+  --plum-primary: #7C5CFC;
+  --plum-primary-glow: rgba(124, 92, 252, 0.35);
+  --bg-base: #0C0A1C;
+  --bg-surface: #141130;
+  --bg-card: #1D1840;
+  --border: #2A2550;
+}
+
+body {
+  background: var(--bg-base);
+  color: #F2F0FF;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── React Flow overrides ─────────────────────────────────────── */
+.react-flow__renderer { background: transparent; }
+.react-flow__background { background-color: transparent; }
+
+.react-flow__edge-path {
+  stroke: #2A2550;
+  stroke-width: 2;
+}
+
+.react-flow__edge.animated .react-flow__edge-path {
+  stroke: var(--plum-primary);
+  stroke-dasharray: 6;
+  animation: dashdraw 0.5s linear infinite;
+}
+
+.react-flow__handle {
+  background: #2A2550 !important;
+  width: 8px !important;
+  height: 8px !important;
+  border: 2px solid #3A3568 !important;
+}
+
+.react-flow__handle-left  { left: -5px !important; }
+.react-flow__handle-right { right: -5px !important; }
+
+.react-flow__controls {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+.react-flow__controls button {
+  background: transparent !important;
+  border: none !important;
+  border-bottom: 1px solid var(--border) !important;
+  color: #8B87B5 !important;
+  width: 28px !important;
+  height: 28px !important;
+}
+
+.react-flow__controls button:last-child { border-bottom: none !important; }
+.react-flow__controls button:hover { background: #2A2550 !important; color: #F2F0FF !important; }
+
+@keyframes dashdraw { to { stroke-dashoffset: -12; } }
+
+/* ── Scrollbar ─────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--bg-base); }
+::-webkit-scrollbar-thumb { background: #2A2550; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3A3568; }
+
+/* ── Selection ─────────────────────────────────────────────────── */
+::selection { background: rgba(124, 92, 252, 0.3); }
