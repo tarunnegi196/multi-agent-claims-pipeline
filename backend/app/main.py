@@ -240,3 +240,14 @@ async def get_claim(claim_id: str) -> FinalOutput:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+# Serve React frontend — must be last so API routes take priority
+import os as _os
+from fastapi.staticfiles import StaticFiles as _StaticFiles
+
+_dist = _os.path.normpath(
+    _os.path.join(_os.path.dirname(__file__), "..", "..", "frontend", "dist")
+)
+if _os.path.isdir(_dist):
+    app.mount("/", _StaticFiles(directory=_dist, html=True), name="static")
