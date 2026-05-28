@@ -126,6 +126,7 @@ class GeminiVisionProvider:
     async def extract(self, file_id: str, dtype: DocumentType,
                       file_bytes: bytes, mime_type: str = "image/jpeg") -> ExtractedDoc:
         if not self._ready:
+            logger.warning("[GEMINI-VISION] SKIP  no API key — returning degraded stub  file_id=%s", file_id)
             return _degraded_stub(file_id, dtype, "no API key or init failed")
         try:
             return await asyncio.wait_for(
@@ -133,8 +134,10 @@ class GeminiVisionProvider:
                 timeout=_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
+            logger.warning("[GEMINI-VISION] TIMEOUT  file_id=%s  timeout=%ds", file_id, _TIMEOUT_SECONDS)
             return _degraded_stub(file_id, dtype, f"timeout after {_TIMEOUT_SECONDS}s")
         except Exception as exc:
+            logger.error("[GEMINI-VISION] ERROR  file_id=%s  error=%s", file_id, exc, exc_info=True)
             return _degraded_stub(file_id, dtype, str(exc))
 
     @retry(
@@ -146,6 +149,14 @@ class GeminiVisionProvider:
     async def _call_gemini(self, file_id: str, dtype: DocumentType,
                            file_bytes: bytes, mime_type: str) -> ExtractedDoc:
         import google.generativeai as genai
+
+        size_kb = len(file_bytes) / 1024
+        logger.info(
+            "[GEMINI-VISION] CALL  model=gemini-2.0-flash  task=extract  "
+            "file_id=%s  doc_type=%s  size=%.1fKB  mime=%s",
+            file_id, dtype.value, size_kb, mime_type,
+        )
+        t0 = time.time()
 
         prompt = _EXTRACTION_PROMPT.format(doc_type=dtype.value)
         image_part = {"mime_type": mime_type, "data": file_bytes}
@@ -171,6 +182,16 @@ class GeminiVisionProvider:
                        "hospital_name", "total_amount"]
         filled = sum(1 for f in core_fields if data.get(f))
         confidence = 0.60 + 0.06 * filled  # 0.60–0.96
+
+        elapsed = time.time() - t0
+        logger.info(
+            "[GEMINI-VISION] DONE  file_id=%s  doc_type=%s  "
+            "fields_filled=%d/6  confidence=%.2f  duration=%.2fs  "
+            "patient=%s  diagnosis=%s",
+            file_id, dtype.value, filled, confidence, elapsed,
+            data.get("patient_name", "(none)"),
+            data.get("diagnosis", "(none)"),
+        )
 
         return _build_extracted(file_id, dtype, data, confidence)
 

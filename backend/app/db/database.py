@@ -1,7 +1,10 @@
+import logging
 import pathlib
 from contextlib import asynccontextmanager
 
 import aiosqlite
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS claims (
@@ -42,9 +45,11 @@ CREATE INDEX IF NOT EXISTS idx_trace_claim ON trace_events(claim_id);
 
 
 async def init_db(db_path: str) -> None:
+    logger.info("[DB] init  path=%s", db_path)
     async with aiosqlite.connect(db_path) as db:
         await db.executescript(_SCHEMA)
         await db.commit()
+    logger.info("[DB] schema ready (claims + trace_events tables)")
 
 
 @asynccontextmanager

@@ -6,6 +6,7 @@ result, then adjusts confidence downward if any components degraded.
 Never makes a claim decision itself; it only assembles and annotates the
 engine's output.
 """
+import logging
 import time
 
 from app.models.graph_state import GraphState
@@ -14,6 +15,8 @@ from app.models.trace import TraceEvent, TraceStatus
 from app.engine.policy_engine import evaluate
 from app.engine.policy_loader import load_policy
 from app.db.bus import event_bus
+
+logger = logging.getLogger(__name__)
 
 
 def _emit(claim_id: str, step_id: str, status: TraceStatus,
@@ -75,6 +78,18 @@ async def compose_node(state: GraphState) -> dict:
         })
 
     elapsed = int((time.time() - t0) * 1000)
+    logger.info(
+        "[DECISION] type=%s  approved=₹%.0f  claimed=₹%.0f  conf=%.2f  "
+        "rejected_reasons=%s  fraud_flags=%s  degraded=%s  duration=%dms",
+        decision.decision_type.value,
+        decision.approved_amount,
+        decision.claimed_amount,
+        decision.confidence,
+        decision.rejection_reasons or "none",
+        decision.fraud_flags or "none",
+        failed or "none",
+        elapsed,
+    )
     events.append(_emit(
         claim_id, "compose.decision", TraceStatus.PASS,
         detail=(

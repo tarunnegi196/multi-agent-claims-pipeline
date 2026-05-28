@@ -5,12 +5,15 @@ Checks: member in roster, amount ≥ minimum, at least one document attached.
 Fast-fails structural garbage without spending LLM tokens.
 Publishes every TraceEvent to the event bus for live SSE streaming.
 """
+import logging
 import time
 
 from app.models.graph_state import GraphState
 from app.models.trace import TraceEvent, TraceStatus
 from app.engine.policy_loader import load_policy
 from app.db.bus import event_bus
+
+logger = logging.getLogger(__name__)
 
 
 async def _pub(claim_id: str, step_id: str, status: TraceStatus,
@@ -32,11 +35,15 @@ async def intake_node(state: GraphState) -> dict:
     t0 = time.time()
     events: list[TraceEvent] = []
 
+    logger.info("[INTAKE] start  claim_id=%s  member=%s  category=%s  amount=₹%.0f",
+                claim_id, claim.member_id, claim.claim_category.value, claim.claimed_amount)
+
     policy = load_policy()
 
     # 1. Member lookup
     member = policy.get_member(claim.member_id)
     if member is None:
+        logger.warning("[INTAKE] FAIL  member_id=%s not found in policy roster", claim.member_id)
         events.append(await _pub(claim_id, "intake.member", TraceStatus.FAIL,
                                  detail=f"Member '{claim.member_id}' not found in policy roster",
                                  rule="members"))
@@ -88,4 +95,7 @@ async def intake_node(state: GraphState) -> dict:
                              confidence=1.0))
     events[-1] = events[-1].model_copy(update={"duration_ms": elapsed})
 
+    elapsed = int((time.time() - t0) * 1000)
+    logger.info("[INTAKE] PASS  member=%s (%s)  docs=%d  duration=%dms",
+                member.name, claim.member_id, len(claim.documents), elapsed)
     return {"intake_ok": True, "halt": False, "trace": events}

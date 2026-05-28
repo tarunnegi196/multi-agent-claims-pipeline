@@ -12,10 +12,13 @@ A mismatch halts the pipeline with a message naming both patients.
 
 Publishes every TraceEvent to the event bus for live SSE streaming.
 """
+import logging
 import time
 from pathlib import Path
 
 from app.models.graph_state import GraphState
+
+logger = logging.getLogger(__name__)
 from app.models.document import ExtractedDoc, FusedDoc, DocumentType, LineItem
 from app.models.trace import TraceEvent, TraceStatus
 from app.models.claim import DocumentRef
@@ -84,6 +87,9 @@ async def extract_node(state: GraphState) -> dict:
     confidences: list[float] = []
 
     doc_map: dict[str, DocumentRef] = {d.file_id: d for d in claim.documents}
+
+    logger.info("[EXTRACT] start  claim_id=%s  docs=%d  simulate_failure=%s",
+                claim_id, len(classified), claim.simulate_component_failure)
 
     if claim.simulate_component_failure:
         event = _make_event(
@@ -155,6 +161,10 @@ async def extract_node(state: GraphState) -> dict:
             fused_docs.append(fused)
             confidences.append(fused.overall_confidence)
 
+            logger.info("[EXTRACT] '%s'  type=%s  method=%s  conf=%.2f",
+                        cdoc.file_name, cdoc.document_type.value,
+                        extracted.extraction_method, fused.overall_confidence)
+
             event = _make_event(
                 claim_id, f"extract.{cdoc.file_id}", TraceStatus.PASS,
                 detail=(
@@ -167,6 +177,7 @@ async def extract_node(state: GraphState) -> dict:
             await event_bus.publish(event)
 
         except Exception as exc:
+            logger.error("[EXTRACT] FAIL  '%s'  error=%s", cdoc.file_name, exc, exc_info=True)
             failed.append(f"extract.{cdoc.file_id}")
             fused_docs.append(FusedDoc(
                 file_id=cdoc.file_id,
@@ -223,6 +234,8 @@ async def extract_node(state: GraphState) -> dict:
     elapsed = int((time.time() - t0) * 1000)
     events[-1] = events[-1].model_copy(update={"duration_ms": elapsed})
 
+    logger.info("[EXTRACT] done  claim_id=%s  avg_conf=%.2f  failed=%s  duration=%dms",
+                claim_id, avg_conf, failed or "none", elapsed)
     return {
         "fused_docs": fused_docs,
         "halt": False,
