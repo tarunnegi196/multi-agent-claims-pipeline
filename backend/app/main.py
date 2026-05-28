@@ -1,11 +1,17 @@
 """
 FastAPI application — the HTTP boundary for the claims pipeline.
 
-Endpoints:
-  POST /api/claims          Submit a claim; runs the full LangGraph pipeline.
-  GET  /api/claims          List recent claims (summary).
-  GET  /api/claims/{id}     Retrieve a stored claim with full trace.
-  GET  /api/claims/{id}/trace  SSE stream of live trace events (TODO: next commit).
+Endpoints (core):
+  POST /api/claims             Submit a claim; runs the full LangGraph pipeline.
+  GET  /api/claims             List recent claims (summary).
+  GET  /api/claims/{id}        Retrieve a stored claim with full trace.
+
+Endpoints (from api/routes.py):
+  POST /api/files              Upload a document file; returns file_id + path.
+  GET  /api/claims/{id}/trace         SSE live stream (connect before POST for live events).
+  GET  /api/claims/{id}/trace/replay  SSE replay of stored events (demo hero).
+
+  GET  /health                 Liveness probe.
 """
 import time
 import uuid
@@ -14,7 +20,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes import router as extra_router
 from app.config import settings
+from app.db.bus import event_bus
 from app.db.database import init_db
 from app.db.repositories import ClaimRepository, TraceRepository
 from app.graph import claims_graph
@@ -29,7 +37,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Plum Claims Engine", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Plum Claims Engine", version="0.2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,12 +47,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(extra_router)
 
-def _build_halt_decision(claim: ClaimSubmission, halt_message: str, intake_ok: bool | None) -> Decision:
+
+# ── Halt decision builder ────────────────────────────────────────────────────
+
+def _build_halt_decision(claim: ClaimSubmission, halt_message: str,
+                         intake_ok: bool | None) -> Decision:
     """Build a Decision when the pipeline halted before the composer ran."""
-    # Intake failures are hard rejections; document issues go to MANUAL_REVIEW
     if intake_ok is False:
-        # Determine reason from message content
         if "not registered" in halt_message or "not found" in halt_message:
             reason = RejectionReason.MEMBER_NOT_FOUND
         elif "minimum" in halt_message:
@@ -59,7 +70,6 @@ def _build_halt_decision(claim: ClaimSubmission, halt_message: str, intake_ok: b
             explanation=halt_message,
         )
 
-    # Document verification / extraction halt → ask member to fix and resubmit
     reason = (
         RejectionReason.UNREADABLE_DOCUMENT
         if "re-upload" in halt_message or "quality" in halt_message.lower()
@@ -74,6 +84,8 @@ def _build_halt_decision(claim: ClaimSubmission, halt_message: str, intake_ok: b
         manual_review_note="Resolve the document issue and resubmit to proceed.",
     )
 
+
+# ── Core claim endpoints ──────────────────────────────────────────────────────
 
 @app.post("/api/claims", response_model=FinalOutput)
 async def submit_claim(claim: ClaimSubmission) -> FinalOutput:
@@ -100,6 +112,9 @@ async def submit_claim(claim: ClaimSubmission) -> FinalOutput:
     result = await claims_graph.ainvoke(initial_state)
     elapsed = int((time.time() - t0) * 1000)
 
+    # Signal the SSE live stream that processing is done
+    await event_bus.close_stream(claim_id)
+
     decision: Decision | None = result.get("decision")
     halt = result.get("halt", False)
     halt_message: str = result.get("halt_message") or "Processing stopped."
@@ -121,7 +136,6 @@ async def submit_claim(claim: ClaimSubmission) -> FinalOutput:
         degraded_components=result.get("failed_components", []),
     )
 
-    # Persist claim and trace events asynchronously
     claim_repo = ClaimRepository(settings.db_path)
     trace_repo = TraceRepository(settings.db_path)
     await claim_repo.save(output)

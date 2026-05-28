@@ -13,6 +13,7 @@ from app.models.decision import Decision, FraudResult
 from app.models.trace import TraceEvent, TraceStatus
 from app.engine.policy_engine import evaluate
 from app.engine.policy_loader import load_policy
+from app.db.bus import event_bus
 
 
 def _emit(claim_id: str, step_id: str, status: TraceStatus,
@@ -85,8 +86,12 @@ async def compose_node(state: GraphState) -> dict:
     ))
     events[-1] = events[-1].model_copy(update={"duration_ms": elapsed})
 
+    all_events = events + engine_events
+    for e in all_events:
+        await event_bus.publish(e)
+
     return {
         "decision": decision,
-        "trace": events + engine_events,
+        "trace": all_events,
         "failed_components": failed,
     }

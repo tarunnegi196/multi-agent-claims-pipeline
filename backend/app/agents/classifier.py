@@ -1,18 +1,21 @@
 """
 DocClassifierAgent — assigns a DocumentType to each uploaded file.
 
-Priority:
-  1. actual_type stub (set by test cases and the API when file type is known)
-  2. Gemini Flash-Lite vision call (when API key available and no stub)
+Resolution priority:
+  1. actual_type stub (set by test cases / API when type is already known)
+  2. GeminiClassifierProvider (when file_path is set and API key is present)
   3. Filename heuristics (fallback, low confidence)
 
-Outputs ClassifiedDoc per file, including quality.
+Emits one TraceEvent per document and publishes each to the event bus
+for live SSE streaming.
 """
 import time
+from pathlib import Path
 
 from app.models.graph_state import GraphState
 from app.models.document import ClassifiedDoc, DocumentType, DocumentQuality
 from app.models.trace import TraceEvent, TraceStatus
+from app.db.bus import event_bus
 
 
 _FILENAME_HINTS: dict[str, DocumentType] = {
@@ -39,8 +42,8 @@ def _classify_by_filename(file_name: str) -> tuple[DocumentType, float]:
     return DocumentType.UNKNOWN, 0.30
 
 
-def _emit(claim_id: str, step_id: str, status: TraceStatus,
-          detail: str = "", confidence: float | None = None) -> TraceEvent:
+def _make_event(claim_id: str, step_id: str, status: TraceStatus,
+                detail: str = "", confidence: float | None = None) -> TraceEvent:
     return TraceEvent(
         claim_id=claim_id, step_id=step_id, agent="DocClassifierAgent",
         status=status, detail=detail, confidence=confidence,
@@ -55,7 +58,7 @@ async def classify_node(state: GraphState) -> dict:
     classified: list[ClassifiedDoc] = []
 
     for doc in claim.documents:
-        # Resolve document type
+        # ── Resolve document type ──────────────────────────────────────────
         if doc.actual_type:
             try:
                 dtype = DocumentType(doc.actual_type)
@@ -65,11 +68,21 @@ async def classify_node(state: GraphState) -> dict:
                 dtype = DocumentType.UNKNOWN
                 confidence = 0.30
                 method = "stub(invalid)"
+
+        elif doc.file_path and Path(doc.file_path).exists():
+            # Real file — use Gemini classifier
+            from app.providers.gemini_classifier import gemini_classifier
+            file_bytes = Path(doc.file_path).read_bytes()
+            suffix = Path(doc.file_path).suffix.lower()
+            mime = "application/pdf" if suffix == ".pdf" else "image/jpeg"
+            dtype, confidence = await gemini_classifier.classify(doc.file_id, file_bytes, mime)
+            method = "gemini_classifier" if gemini_classifier.is_available() else "gemini_fallback"
+
         else:
             dtype, confidence = _classify_by_filename(doc.file_name)
             method = "filename_heuristic"
 
-        # Resolve quality
+        # ── Resolve quality ────────────────────────────────────────────────
         quality = DocumentQuality.GOOD
         if doc.quality:
             try:
@@ -86,14 +99,16 @@ async def classify_node(state: GraphState) -> dict:
         ))
 
         status = TraceStatus.PASS if dtype != DocumentType.UNKNOWN else TraceStatus.WARN
-        events.append(_emit(
+        event = _make_event(
             claim_id, f"classify.{doc.file_id}", status,
             detail=(
                 f"'{doc.file_name}' → {dtype.value} "
                 f"(method={method}, conf={confidence:.2f}, quality={quality.value})"
             ),
             confidence=confidence,
-        ))
+        )
+        events.append(event)
+        await event_bus.publish(event)
 
     elapsed = int((time.time() - t0) * 1000)
     if events:

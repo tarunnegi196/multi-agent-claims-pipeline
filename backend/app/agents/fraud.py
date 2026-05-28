@@ -16,6 +16,7 @@ from app.models.graph_state import GraphState
 from app.models.decision import FraudResult
 from app.models.trace import TraceEvent, TraceStatus
 from app.engine.policy_loader import load_policy
+from app.db.bus import event_bus
 
 
 def _emit(claim_id: str, step_id: str, status: TraceStatus,
@@ -146,5 +147,8 @@ async def fraud_node(state: GraphState) -> dict:
 
     elapsed = int((time.time() - t0) * 1000)
     events[-1] = events[-1].model_copy(update={"duration_ms": elapsed})
+
+    for e in events:
+        await event_bus.publish(e)
 
     return {"fraud_result": result, "trace": events}

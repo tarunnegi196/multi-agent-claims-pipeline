@@ -7,6 +7,7 @@ Two checks (in order):
 
 On failure the halt_message is specific: names the uploaded types, the
 required types, and what is missing — giving the member precise next steps.
+Publishes every TraceEvent to the event bus for live SSE streaming.
 """
 import time
 
@@ -14,14 +15,17 @@ from app.models.graph_state import GraphState
 from app.models.document import DocumentQuality
 from app.models.trace import TraceEvent, TraceStatus
 from app.engine.policy_loader import load_policy
+from app.db.bus import event_bus
 
 
-def _emit(claim_id: str, step_id: str, status: TraceStatus,
-          detail: str = "", rule: str = "") -> TraceEvent:
-    return TraceEvent(
+async def _pub(claim_id: str, step_id: str, status: TraceStatus,
+               detail: str = "", rule: str = "") -> TraceEvent:
+    event = TraceEvent(
         claim_id=claim_id, step_id=step_id, agent="DocVerifierAgent",
         status=status, detail=detail, rule_reference=rule or None,
     )
+    await event_bus.publish(event)
+    return event
 
 
 async def verify_node(state: GraphState) -> dict:
@@ -46,22 +50,22 @@ async def verify_node(state: GraphState) -> dict:
             f"Please re-upload a clear, well-lit photo or scan of each document and "
             f"resubmit — do not re-upload documents that were already readable."
         )
-        events.append(_emit(claim_id, "verify.quality", TraceStatus.FAIL,
-                            detail=f"Unreadable: {names}", rule="document_quality"))
+        events.append(await _pub(claim_id, "verify.quality", TraceStatus.FAIL,
+                                 detail=f"Unreadable: {names}", rule="document_quality"))
         return {
             "verification_ok": False,
             "halt": True,
             "halt_message": msg,
             "trace": events,
         }
-    events.append(_emit(claim_id, "verify.quality", TraceStatus.PASS,
-                        detail="All documents are readable"))
+    events.append(await _pub(claim_id, "verify.quality", TraceStatus.PASS,
+                             detail="All documents are readable"))
 
     # ── 2. Document-type completeness gate ───────────────────────────────────
     doc_reqs = policy.document_requirements
     if category not in doc_reqs:
-        events.append(_emit(claim_id, "verify.type_check", TraceStatus.WARN,
-                            detail=f"No document requirements configured for '{category}'"))
+        events.append(await _pub(claim_id, "verify.type_check", TraceStatus.WARN,
+                                 detail=f"No document requirements configured for '{category}'"))
         return {"verification_ok": True, "halt": False, "trace": events}
 
     required_types = set(doc_reqs[category].required)
@@ -80,7 +84,7 @@ async def verify_node(state: GraphState) -> dict:
             f"Missing: {missing_desc}. "
             f"Please upload the missing document(s) and resubmit your claim."
         )
-        events.append(_emit(
+        events.append(await _pub(
             claim_id, "verify.type_check", TraceStatus.FAIL,
             detail=f"Missing required: {missing_desc}",
             rule=f"document_requirements.{category}.required",
@@ -92,13 +96,12 @@ async def verify_node(state: GraphState) -> dict:
             "trace": events,
         }
 
-    events.append(_emit(
+    elapsed = int((time.time() - t0) * 1000)
+    event = await _pub(
         claim_id, "verify.type_check", TraceStatus.PASS,
         detail=f"All required types present: {', '.join(sorted(required_types))}",
         rule=f"document_requirements.{category}.required",
-    ))
-
-    elapsed = int((time.time() - t0) * 1000)
-    events[-1] = events[-1].model_copy(update={"duration_ms": elapsed})
+    )
+    events.append(event.model_copy(update={"duration_ms": elapsed}))
 
     return {"verification_ok": True, "halt": False, "trace": events}
