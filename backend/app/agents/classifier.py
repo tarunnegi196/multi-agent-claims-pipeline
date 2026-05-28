@@ -9,6 +9,7 @@ Resolution priority:
 Emits one TraceEvent per document and publishes each to the event bus
 for live SSE streaming.
 """
+import logging
 import time
 from pathlib import Path
 
@@ -16,6 +17,8 @@ from app.models.graph_state import GraphState
 from app.models.document import ClassifiedDoc, DocumentType, DocumentQuality
 from app.models.trace import TraceEvent, TraceStatus
 from app.db.bus import event_bus
+
+logger = logging.getLogger(__name__)
 
 
 _FILENAME_HINTS: dict[str, DocumentType] = {
@@ -56,6 +59,8 @@ async def classify_node(state: GraphState) -> dict:
     t0 = time.time()
     events: list[TraceEvent] = []
     classified: list[ClassifiedDoc] = []
+
+    logger.info("[CLASSIFY] start  claim_id=%s  docs=%d", claim_id, len(claim.documents))
 
     for doc in claim.documents:
         # ── Resolve document type ──────────────────────────────────────────
@@ -98,6 +103,9 @@ async def classify_node(state: GraphState) -> dict:
             quality=quality,
         ))
 
+        logger.info("[CLASSIFY] '%s' → %s  method=%s  conf=%.2f",
+                    doc.file_name, dtype.value, method, confidence)
+
         status = TraceStatus.PASS if dtype != DocumentType.UNKNOWN else TraceStatus.WARN
         event = _make_event(
             claim_id, f"classify.{doc.file_id}", status,
@@ -114,4 +122,8 @@ async def classify_node(state: GraphState) -> dict:
     if events:
         events[-1] = events[-1].model_copy(update={"duration_ms": elapsed})
 
+    logger.info("[CLASSIFY] done  claim_id=%s  results=[%s]  duration=%dms",
+                claim_id,
+                ", ".join(f"{c.document_type.value}({c.confidence:.2f})" for c in classified),
+                elapsed)
     return {"classified_docs": classified, "trace": events}

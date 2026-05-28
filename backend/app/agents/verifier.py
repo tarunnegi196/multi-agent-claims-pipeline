@@ -9,6 +9,7 @@ On failure the halt_message is specific: names the uploaded types, the
 required types, and what is missing — giving the member precise next steps.
 Publishes every TraceEvent to the event bus for live SSE streaming.
 """
+import logging
 import time
 
 from app.models.graph_state import GraphState
@@ -16,6 +17,8 @@ from app.models.document import DocumentQuality
 from app.models.trace import TraceEvent, TraceStatus
 from app.engine.policy_loader import load_policy
 from app.db.bus import event_bus
+
+logger = logging.getLogger(__name__)
 
 
 async def _pub(claim_id: str, step_id: str, status: TraceStatus,
@@ -38,6 +41,9 @@ async def verify_node(state: GraphState) -> dict:
     classified = state["classified_docs"]
     category = claim.claim_category.value
 
+    logger.info("[VERIFY] start  claim_id=%s  category=%s  docs=%d",
+                claim_id, category, len(classified))
+
     # ── 1. Quality gate ──────────────────────────────────────────────────────
     unreadable = [d for d in classified if d.quality == DocumentQuality.UNREADABLE]
     if unreadable:
@@ -50,6 +56,7 @@ async def verify_node(state: GraphState) -> dict:
             f"Please re-upload a clear, well-lit photo or scan of each document and "
             f"resubmit — do not re-upload documents that were already readable."
         )
+        logger.warning("[VERIFY] HALT  quality_fail  unreadable=%s", names)
         events.append(await _pub(claim_id, "verify.quality", TraceStatus.FAIL,
                                  detail=f"Unreadable: {names}", rule="document_quality"))
         return {
@@ -84,6 +91,8 @@ async def verify_node(state: GraphState) -> dict:
             f"Missing: {missing_desc}. "
             f"Please upload the missing document(s) and resubmit your claim."
         )
+        logger.warning("[VERIFY] HALT  missing_docs  required=%s  provided=%s  missing=%s",
+                       sorted(required_types), sorted(provided_types), sorted(missing))
         events.append(await _pub(
             claim_id, "verify.type_check", TraceStatus.FAIL,
             detail=f"Missing required: {missing_desc}",
@@ -97,6 +106,8 @@ async def verify_node(state: GraphState) -> dict:
         }
 
     elapsed = int((time.time() - t0) * 1000)
+    logger.info("[VERIFY] PASS  all_docs_present  required=%s  duration=%dms",
+                sorted(required_types), elapsed)
     event = await _pub(
         claim_id, "verify.type_check", TraceStatus.PASS,
         detail=f"All required types present: {', '.join(sorted(required_types))}",

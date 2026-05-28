@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     policy_file: str = str(_ROOT / "data" / "policy_terms.json")
     upload_dir: str = str(pathlib.Path(__file__).parent.parent / "uploads")
 
+    # Logging
+    log_level: str = "INFO"    # DEBUG | INFO | WARNING | ERROR
+    log_format: str = "pretty" # pretty (dev) | json (prod/cloud)
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

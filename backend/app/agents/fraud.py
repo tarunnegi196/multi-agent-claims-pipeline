@@ -10,6 +10,7 @@ Signals checked:
 force_manual_review is set to True when same-day limit is exceeded
 or fraud_score reaches fraud_score_manual_review_threshold.
 """
+import logging
 import time
 
 from app.models.graph_state import GraphState
@@ -17,6 +18,8 @@ from app.models.decision import FraudResult
 from app.models.trace import TraceEvent, TraceStatus
 from app.engine.policy_loader import load_policy
 from app.db.bus import event_bus
+
+logger = logging.getLogger(__name__)
 
 
 def _emit(claim_id: str, step_id: str, status: TraceStatus,
@@ -133,6 +136,12 @@ async def fraud_node(state: GraphState) -> dict:
         same_day_count=same_day_count,
         monthly_count=monthly_count,
     )
+
+    if force_review:
+        logger.warning("[FRAUD] force_manual_review  score=%.2f  flags=%s", fraud_score, flags)
+    else:
+        logger.info("[FRAUD] clear  score=%.2f  same_day=%d  monthly=%d",
+                    fraud_score, same_day_count, monthly_count)
 
     summary_status = TraceStatus.WARN if force_review else TraceStatus.PASS
     events.append(_emit(

@@ -87,6 +87,13 @@ class GeminiClassifierProvider:
     )
     async def _call_gemini(self, file_bytes: bytes,
                            mime_type: str) -> tuple[DocumentType, float]:
+        size_kb = len(file_bytes) / 1024
+        logger.info(
+            "[GEMINI-CLASSIFY] CALL  model=gemini-2.0-flash  size=%.1fKB  mime=%s",
+            size_kb, mime_type,
+        )
+        t0 = asyncio.get_event_loop().time()
+
         image_part = {"mime_type": mime_type, "data": file_bytes}
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
@@ -105,6 +112,12 @@ class GeminiClassifierProvider:
         if dtype_str not in _VALID_TYPES:
             dtype_str = "UNKNOWN"
         confidence = float(data.get("confidence", 0.70))
+
+        elapsed = asyncio.get_event_loop().time() - t0
+        logger.info(
+            "[GEMINI-CLASSIFY] DONE  result=%s  confidence=%.2f  duration=%.2fs",
+            dtype_str, confidence, elapsed,
+        )
         return DocumentType(dtype_str), confidence
 
 

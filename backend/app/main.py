@@ -13,11 +13,12 @@ Endpoints (from api/routes.py):
 
   GET  /health                 Liveness probe.
 """
+import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router as extra_router
@@ -26,15 +27,30 @@ from app.db.bus import event_bus
 from app.db.database import init_db
 from app.db.repositories import ClaimRepository, TraceRepository
 from app.graph import claims_graph
+from app.logging_config import setup_logging
 from app.models.claim import ClaimSubmission
 from app.models.decision import Decision, DecisionType, FinalOutput, RejectionReason
 from app.models.graph_state import GraphState
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Configure logging first so all startup messages are formatted correctly
+    setup_logging(settings.log_level, settings.log_format)
+    logger.info("=== Plum Claims Engine starting up ===")
+    logger.info(
+        "Config: db=%s  policy=%s  upload_dir=%s  gemini_key=%s",
+        settings.db_path,
+        settings.policy_file,
+        settings.upload_dir,
+        "SET" if settings.gemini_api_key else "NOT SET (test/stub mode)",
+    )
     await init_db(settings.db_path)
+    logger.info("Database initialised at %s", settings.db_path)
     yield
+    logger.info("=== Plum Claims Engine shutting down ===")
 
 
 app = FastAPI(title="Plum Claims Engine", version="0.2.0", lifespan=lifespan)
@@ -48,6 +64,25 @@ app.add_middleware(
 )
 
 app.include_router(extra_router)
+
+
+# ── HTTP request/response logger ─────────────────────────────────────────────
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    t0 = time.time()
+    response = await call_next(request)
+    duration = int((time.time() - t0) * 1000)
+    # Skip noisy health-check and static asset logs at INFO level
+    if request.url.path not in ("/health", "/favicon.ico"):
+        logger.info(
+            "%s %s → %d  (%d ms)",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration,
+        )
+    return response
 
 
 # ── Halt decision builder ────────────────────────────────────────────────────
@@ -91,6 +126,16 @@ def _build_halt_decision(claim: ClaimSubmission, halt_message: str,
 async def submit_claim(claim: ClaimSubmission) -> FinalOutput:
     claim_id = str(uuid.uuid4())
     t0 = time.time()
+
+    logger.info(
+        "[CLAIM-START] claim_id=%s  member=%s  category=%s  amount=₹%.0f  docs=%d  simulate_failure=%s",
+        claim_id,
+        claim.member_id,
+        claim.claim_category.value,
+        claim.claimed_amount,
+        len(claim.documents),
+        claim.simulate_component_failure,
+    )
 
     initial_state: GraphState = {
         "claim": claim,
@@ -136,6 +181,19 @@ async def submit_claim(claim: ClaimSubmission) -> FinalOutput:
         degraded_components=result.get("failed_components", []),
     )
 
+    logger.info(
+        "[CLAIM-END]   claim_id=%s  decision=%s  approved=₹%.0f  confidence=%.2f  "
+        "halt=%s  degraded=%s  trace_events=%d  duration=%dms",
+        claim_id,
+        decision.decision_type.value,
+        decision.approved_amount,
+        decision.confidence,
+        halt,
+        output.degraded_components or "none",
+        len(output.trace),
+        elapsed,
+    )
+
     claim_repo = ClaimRepository(settings.db_path)
     trace_repo = TraceRepository(settings.db_path)
     await claim_repo.save(output)
@@ -147,7 +205,9 @@ async def submit_claim(claim: ClaimSubmission) -> FinalOutput:
 @app.get("/api/claims", response_model=list[dict])
 async def list_claims(limit: int = 20) -> list[dict]:
     repo = ClaimRepository(settings.db_path)
-    return await repo.list_recent(limit)
+    claims = await repo.list_recent(limit)
+    logger.debug("list_claims: returned %d records (limit=%d)", len(claims), limit)
+    return claims
 
 
 @app.get("/api/claims/{claim_id}", response_model=FinalOutput)
@@ -155,7 +215,9 @@ async def get_claim(claim_id: str) -> FinalOutput:
     repo = ClaimRepository(settings.db_path)
     output = await repo.get(claim_id)
     if output is None:
+        logger.warning("get_claim: claim_id=%s not found", claim_id)
         raise HTTPException(status_code=404, detail=f"Claim '{claim_id}' not found")
+    logger.debug("get_claim: claim_id=%s  decision=%s", claim_id, output.decision.decision_type.value)
     return output
 
 
