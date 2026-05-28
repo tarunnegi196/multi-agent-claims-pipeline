@@ -18,6 +18,11 @@ class DocumentRef(BaseModel):
     file_name: str
     file_path: Optional[str] = None
     content_type: Optional[str] = None
+    # Stub fields used by test cases and the document-type classifier
+    actual_type: Optional[str] = None
+    content: Optional[dict] = None
+    quality: Optional[str] = None
+    patient_name_on_doc: Optional[str] = None
 
 
 class ClaimHistory(BaseModel):
