@@ -1,114 +1,197 @@
-import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
-import SubmitPage from './pages/SubmitPage'
+import { useState, useEffect } from 'react'
+import { BrowserRouter, Routes, Route, NavLink, useNavigate } from 'react-router-dom'
+import SubmitPage  from './pages/SubmitPage'
 import HistoryPage from './pages/HistoryPage'
-import EvalPage from './pages/EvalPage'
+import EvalPage    from './pages/EvalPage'
 
-/* Plum wordmark + shield icon */
-function PlumLogo() {
+/* ── Navbar ──────────────────────────────────────────────────────── */
+function useApiHealth() {
+  const [status, setStatus] = useState('checking') // 'checking' | 'ok' | 'down'
+
+  useEffect(() => {
+    let cancelled = false
+    async function check() {
+      try {
+        const res = await fetch('/health', { signal: AbortSignal.timeout(3000) })
+        if (!cancelled) setStatus(res.ok ? 'ok' : 'down')
+      } catch {
+        if (!cancelled) setStatus('down')
+      }
+    }
+    check()
+    const id = setInterval(check, 15000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
+  return status
+}
+
+function Navbar() {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const apiStatus = useApiHealth()
+
+  const navLinkStyle = ({ isActive }) => ({
+    fontSize: '1.25rem',
+    fontWeight: 500,
+    color: isActive ? '#ff4052' : '#570e40',
+    textDecoration: 'none',
+    padding: '6px 14px',
+    borderRadius: 30,
+    background: isActive ? 'rgba(255,64,82,0.08)' : 'transparent',
+    transition: 'color 0.2s ease, background 0.2s ease, transform 0.18s ease, box-shadow 0.18s ease',
+    whiteSpace: 'nowrap',
+  })
+
   return (
-    <div className="flex items-center gap-2.5">
-      {/* Shield icon */}
-      <svg width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden>
-        <rect width="30" height="30" rx="8" fill="#7C5CFC" />
-        <path
-          d="M15 4.5C15 4.5 8 7.2 8 13.5C8 19.2 11.5 23.2 15 25.5C18.5 23.2 22 19.2 22 13.5C22 7.2 15 4.5 15 4.5Z"
-          fill="white"
-          fillOpacity="0.95"
-        />
-        <path
-          d="M15 9.5C15 9.5 11 11.3 11 14.8C11 17.9 13 20.2 15 21.5C17 20.2 19 17.9 19 14.8C19 11.3 15 9.5 15 9.5Z"
-          fill="#7C5CFC"
-        />
-      </svg>
-
-      {/* Wordmark */}
-      <div className="flex items-baseline gap-1.5">
-        <span className="text-white font-bold text-lg tracking-tight leading-none">plum</span>
-        <span
-          className="text-xs font-medium px-1.5 py-0.5 rounded"
-          style={{ background: 'rgba(124,92,252,0.25)', color: '#B8A9FF', border: '1px solid rgba(124,92,252,0.4)' }}
+    <header style={{
+      background: '#fffaf2',
+      borderBottom: '1px solid #ced5dd',
+      position: 'sticky',
+      top: 0,
+      zIndex: 100,
+    }}>
+      <div style={{
+        maxWidth: 1200,
+        margin: '0 auto',
+        padding: '0 20px',
+        height: 56,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 24,
+      }}>
+        {/* Logo — href="/" stays on site, no external links */}
+        <a href="/" className="plum-nav-logo-area" style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          textDecoration: 'none',
+          flexShrink: 0,
+          transition: 'opacity 25ms cubic-bezier(0.455, 0.03, 0.515, 0.955)',
+        }}
+          onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.85' }}
+          onMouseLeave={(e) => { e.currentTarget.style.opacity = '1' }}
         >
-          Claims Engine
-        </span>
-      </div>
-    </div>
-  )
-}
+          <img src="/plum_logo.png" alt="Plum" height="32"
+            style={{ height: 32, width: 'auto', display: 'block' }} />
+          <span style={{
+            fontSize: 11,
+            color: '#9e708c',
+            borderLeft: '1px solid #ced5dd',
+            paddingLeft: 10,
+            marginLeft: 2,
+            fontWeight: 500,
+          }}>
+            Claims Engine
+          </span>
+        </a>
 
-function BackendStatus() {
-  return (
-    <div className="flex items-center gap-1.5 text-xs" style={{ color: '#8B87B5' }}>
-      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-      API connected
-    </div>
-  )
-}
-
-function Header() {
-  const base = 'px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all duration-150'
-  const linkClass = ({ isActive }) =>
-    isActive
-      ? `${base} text-white`
-      : `${base} hover:text-plum-300`
-
-  const activeStyle = { background: 'rgba(124,92,252,0.2)', color: '#B8A9FF', border: '1px solid rgba(124,92,252,0.35)' }
-  const inactiveStyle = { color: '#8B87B5', border: '1px solid transparent' }
-
-  return (
-    <header
-      style={{ background: 'linear-gradient(180deg, #110E28 0%, #0C0A1C 100%)', borderBottom: '1px solid #2A2550' }}
-      className="sticky top-0 z-50"
-    >
-      <div className="max-w-screen-2xl mx-auto px-5 h-14 flex items-center gap-6">
-        <PlumLogo />
-
-        <nav className="flex gap-1">
+        {/* Desktop nav */}
+        <nav className="plum-nav-menu" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           {[
-            { to: '/', label: 'Submit Claim', end: true },
-            { to: '/history', label: 'History', end: false },
-            { to: '/eval', label: 'Eval Report', end: false },
+            { to: '/',        label: 'New Claim',    end: true  },
+            { to: '/history', label: 'History',      end: false },
+            { to: '/eval',    label: 'Eval Report',  end: false },
           ].map(({ to, label, end }) => (
-            <NavLink key={to} to={to} end={end}>
-              {({ isActive }) => (
-                <span
-                  className={`${base} cursor-pointer`}
-                  style={isActive ? activeStyle : inactiveStyle}
-                >
-                  {label}
-                </span>
-              )}
+            <NavLink key={to} to={to} end={end} style={navLinkStyle}
+              onMouseEnter={(e) => {
+                if (!e.currentTarget.style.background.includes('0.08')) e.currentTarget.style.background = 'rgba(87,14,64,0.06)'
+                e.currentTarget.style.transform = 'translateY(-2px)'
+                e.currentTarget.style.boxShadow = '0 4px 12px rgba(87,14,64,0.18)'
+              }}
+              onMouseLeave={(e) => {
+                if (!e.currentTarget.style.background.includes('0.08')) e.currentTarget.style.background = 'transparent'
+                e.currentTarget.style.transform = 'translateY(0)'
+                e.currentTarget.style.boxShadow = 'none'
+              }}>
+              {label}
             </NavLink>
           ))}
         </nav>
 
-        <div className="ml-auto flex items-center gap-4">
-          <BackendStatus />
-          <a
-            href="https://www.plumhq.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs transition-colors"
-            style={{ color: '#3D3668' }}
-          >
-            plumhq.com ↗
-          </a>
+        {/* Right side: status + disclaimer ────────────────────────── */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 24, marginLeft: 'auto' }}>
+          <span style={{
+            display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 500,
+            color: apiStatus === 'ok' ? '#92bd33' : apiStatus === 'down' ? '#ff4052' : '#9e708c',
+          }}>
+            {apiStatus === 'down' ? (
+              <span style={{ fontSize: 13, lineHeight: 1 }}>✕</span>
+            ) : (
+              <span style={{
+                width: 7, height: 7, borderRadius: '50%', display: 'inline-block',
+                background: apiStatus === 'ok' ? '#92bd33' : '#9e708c',
+                animation: apiStatus === 'ok'
+                  ? 'api-glow 2s ease-in-out infinite'
+                  : 'pulse 1s ease-in-out infinite',
+              }} />
+            )}
+            {apiStatus === 'ok' ? 'API ready' : apiStatus === 'down' ? 'Backend offline' : 'Connecting…'}
+          </span>
+          <span style={{ fontSize: 10, color: '#9e708c', borderLeft: '1px solid #ced5dd', paddingLeft: 24, fontStyle: 'italic' }}>
+            Demo project · Not affiliated with Plum Benefits Insurance Brokers Pvt Ltd
+          </span>
         </div>
+
+        {/* Hamburger — visible ≤991px via CSS */}
+        <button
+          className="plum-nav-hamburger"
+          onClick={() => setMenuOpen((v) => !v)}
+          style={{
+            display: 'none',
+            fontSize: 24,
+            padding: 18,
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            color: '#570e40',
+            lineHeight: 1,
+          }}
+        >
+          {menuOpen ? '✕' : '☰'}
+        </button>
       </div>
+
+      {/* Mobile menu dropdown */}
+      {menuOpen && (
+        <div style={{
+          background: '#fffaf2',
+          borderTop: '1px solid #ced5dd',
+          padding: '12px 20px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+        }}>
+          {[
+            { to: '/',        label: 'New Claim',    end: true  },
+            { to: '/history', label: 'History',      end: false },
+            { to: '/eval',    label: 'Eval Report',  end: false },
+          ].map(({ to, label, end }) => (
+            <NavLink key={to} to={to} end={end} onClick={() => setMenuOpen(false)}
+              style={navLinkStyle}>
+              {label}
+            </NavLink>
+          ))}
+        </div>
+      )}
     </header>
   )
 }
 
+/* ── Root app ────────────────────────────────────────────────────── */
 export default function App() {
   return (
     <BrowserRouter>
-      <div className="min-h-screen" style={{ background: '#0C0A1C', color: '#F2F0FF' }}>
-        <Header />
-        <Routes>
-          <Route path="/"            element={<SubmitPage />} />
-          <Route path="/claims/:id"  element={<SubmitPage />} />
-          <Route path="/history"     element={<HistoryPage />} />
-          <Route path="/eval"        element={<EvalPage />} />
-        </Routes>
+      <div style={{ minHeight: '100vh', background: '#11040d', color: '#fff', display: 'flex', flexDirection: 'column', fontFamily: 'Inter, Arial, sans-serif' }}>
+        <Navbar />
+        <div style={{ flex: 1 }}>
+          <Routes>
+            <Route path="/"           element={<SubmitPage />} />
+            <Route path="/claims/:id" element={<SubmitPage />} />
+            <Route path="/history"    element={<HistoryPage />} />
+            <Route path="/eval"       element={<EvalPage />} />
+          </Routes>
+        </div>
       </div>
     </BrowserRouter>
   )

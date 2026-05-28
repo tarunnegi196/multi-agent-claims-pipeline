@@ -4,74 +4,339 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Base ──────────────────────────────────────────────────────── */
+/* ════════════════════════════════════════════════════════════
+   PLUM EXACT CSS VARIABLES  (copied from plumhq.com live CSS)
+   ════════════════════════════════════════════════════════════ */
 :root {
-  --plum-primary: #7C5CFC;
-  --plum-primary-glow: rgba(124, 92, 252, 0.35);
-  --bg-base: #0C0A1C;
-  --bg-surface: #141130;
-  --bg-card: #1D1840;
-  --border: #2A2550;
+  /* Dark backgrounds */
+  --plum-bg-darkest:   #11040d;
+  --plum-bg-dark:      #1d0716;
+  --plum-bg-dark-2:    #2c0b21;
+  --plum-bg-dark-3:    #340926;
+  --plum-bg-dark-4:    #3a0e2b;
+
+  /* Brand purples */
+  --plum-purple-deep:  #460932;
+  --plum-purple-mid:   #570e40;
+  --plum-purple-btn:   #7b4067;
+  --plum-purple-hover: #733c61;
+  --plum-purple-muted: #9e708c;
+  --plum-purple-light: #bea0b3;
+  --plum-purple-pale:  #d8c5d1;
+
+  /* Light backgrounds */
+  --plum-bg-warm:      #fffaf2;
+  --plum-bg-warm-2:    #fff8f1;
+  --plum-bg-warm-3:    #fffbf7;
+  --plum-bg-peach:     #ffebdb;
+  --plum-bg-blush:     #eae1e7;
+
+  /* Accent / status */
+  --plum-red:          #ff4052;
+  --plum-red-dark:     #e23744;
+  --plum-red-deeper:   #cc3342;
+  --plum-red-light:    #ffe4e5;
+  --plum-green:        #92bd33;
+  --plum-green-light:  #a9cb62;
+  --plum-green-pale:   #d4e5b2;
+  --plum-yellow:       #ffbf21;
+  --plum-teal:         #28c9c9;
+  --plum-blue:         #429cd8;
+  --plum-orange:       #ff5600;
+
+  /* Text & borders */
+  --plum-text-primary: #2d2d2d;
+  --plum-text-dark:    #41495e;
+  --plum-text-muted:   #55657d;
+  --plum-text-light:   #a0a5ab;
+  --plum-border:       #ced5dd;
+  --plum-border-light: #ebebeb;
 }
+
+/* ════════════════════════════════════════════════════════════
+   TYPOGRAPHY  (exact from Plum's live CSS)
+   ════════════════════════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; }
 
 body {
-  background: var(--bg-base);
-  color: #F2F0FF;
-  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+  font-family: 'Inter', Arial, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--plum-text-primary);
+  background: var(--plum-bg-darkest);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* ── React Flow overrides ─────────────────────────────────────── */
+h1 { font-size: 38px; line-height: 44px; font-weight: 700; margin-top: 20px; }
+h2 { font-size: 32px; line-height: 36px; font-weight: 700; margin-top: 20px; }
+h3 { font-size: 24px; line-height: 30px; font-weight: 700; margin-top: 20px; }
+h4 { font-size: 18px; line-height: 24px; font-weight: 700; margin-top: 10px; }
+h5 { font-size: 14px; line-height: 20px; font-weight: 700; margin-top: 10px; }
+h6 { font-size: 12px; line-height: 18px; font-weight: 700; margin-top: 10px; }
+
+blockquote {
+  border-left: 5px solid #e2e2e2;
+  padding: 10px 20px;
+  font-size: 18px;
+  line-height: 22px;
+}
+
+/* ════════════════════════════════════════════════════════════
+   FORMS & INPUTS  (exact from Plum's live CSS)
+   ════════════════════════════════════════════════════════════ */
+.plum-input,
+.plum-select,
+.plum-textarea {
+  color: #333333;
+  background-color: #1d0716;
+  border: 1px solid #460932;
+  width: 100%;
+  height: 38px;
+  padding: 8px 12px;
+  font-size: 14px;
+  line-height: 1.42857;
+  margin-bottom: 10px;
+  font-family: 'Inter', Arial, sans-serif;
+  border-radius: 6px;
+  transition: border-color 0.1s;
+}
+
+.plum-input { color: #d8c5d1; }
+.plum-select { color: #d8c5d1; }
+.plum-textarea { height: auto; min-height: 38px; resize: vertical; color: #d8c5d1; }
+
+.plum-input:focus,
+.plum-select:focus,
+.plum-textarea:focus {
+  outline: none;
+  border-color: var(--plum-purple-btn);
+  box-shadow: 0 0 0 2px rgba(123,64,103,0.2);
+}
+
+.plum-label {
+  font-weight: 700;
+  margin-bottom: 5px;
+  display: block;
+  font-size: 12px;
+  color: var(--plum-purple-light);
+}
+
+.plum-error-input {
+  background-color: #ffdddd;
+  color: #ea384c;
+}
+
+/* ════════════════════════════════════════════════════════════
+   BUTTONS  (exact from Plum's live CSS)
+   ════════════════════════════════════════════════════════════ */
+
+/* Primary CTA */
+.btn-cta {
+  background-color: #ff4052;
+  color: #ffffff;
+  border: none;
+  border-radius: 30px;
+  padding: 1rem 2rem;
+  font-size: 1.2rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.1s;
+  box-shadow: rgba(0, 0, 0, 0.1) 2px 4px 20px 5px;
+  font-family: 'Inter', Arial, sans-serif;
+}
+.btn-cta:hover  { background-color: #e23744; }
+.btn-cta:active { background-color: #cc3342; }
+
+/* Small primary */
+.btn-sm-primary {
+  background-color: #570e40;
+  color: #ffffff;
+  border: 2px solid #570e40;
+  border-radius: 0.625rem;
+  padding: 0.5rem 1rem 0.4rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.1s;
+  font-family: 'Inter', Arial, sans-serif;
+}
+.btn-sm-primary:hover { background-color: #460932; border-color: #460932; }
+
+/* Outlined pill */
+.btn-outline-pill {
+  border: 1px solid #570e40;
+  color: #570e40;
+  background-color: transparent;
+  border-radius: 30px;
+  padding: 5px 20px;
+  font-size: 1.25rem;
+  cursor: pointer;
+  transition: background-color 0.4s cubic-bezier(0.47, 0, 0.745, 0.715);
+  font-family: 'Inter', Arial, sans-serif;
+}
+.btn-outline-pill:hover { background-color: rgba(87,14,64,0.08); }
+
+/* Inline nav/action pill */
+.btn-action {
+  background: rgba(123,64,103,0.12);
+  color: #d8c5d1;
+  border: 1px solid #7b4067;
+  border-radius: 30px;
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.1s;
+}
+.btn-action:hover { background: rgba(123,64,103,0.28); }
+
+/* ════════════════════════════════════════════════════════════
+   CARDS  (exact from Plum's live CSS)
+   ════════════════════════════════════════════════════════════ */
+
+/* Standard card */
+.plum-card {
+  background-color: var(--plum-bg-dark-3);
+  border: 1px solid rgba(87, 14, 64, 0.12);
+  border-radius: 16px;
+  padding: 24px;
+  transition: 0.2s;
+}
+
+/* Feature card */
+.plum-card-feature {
+  background-color: var(--plum-bg-dark-2);
+  border-radius: 30px;
+  padding: 2rem;
+  overflow: hidden;
+  transition: height 50ms cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+/* Card hover */
+.plum-card:hover {
+  border-color: #570e40;
+  transform: scale(1.01);
+  box-shadow: rgba(0, 0, 0, 0.2) 0px 2px 5px 1px;
+}
+
+/* Promo/section shadow */
+.plum-shadow-promo { box-shadow: rgba(70, 9, 50, 0.3) -1px 2px 8px -1px; }
+.plum-shadow-cta   { box-shadow: rgba(0, 0, 0, 0.1) 2px 4px 20px 5px; }
+.plum-shadow-panel { box-shadow: rgba(49, 37, 22, 0.05) 0px 1px 1rem; }
+
+/* ════════════════════════════════════════════════════════════
+   ANIMATIONS  (exact from Plum's live CSS)
+   ════════════════════════════════════════════════════════════ */
+@keyframes pulse {
+  0%,100% { opacity: 1; }
+  50%     { opacity: 0.3; }
+}
+
+@keyframes api-glow {
+  0%,100% { box-shadow: 0 0 0 0 rgba(146,189,51,0.5); }
+  50%     { box-shadow: 0 0 7px 3px rgba(146,189,51,0.45); }
+}
+
+@keyframes spin {
+  0%   { transform: rotate(0deg);   }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes node-glow {
+  0%,100% { box-shadow: 0 0 4px 0 rgba(123,64,103,0.35); }
+  50%     { box-shadow: 0 0 18px 6px rgba(123,64,103,0.7); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+
+/* Card reveal / slide */
+.plum-transition-card {
+  transition: opacity 0.3s cubic-bezier(0.165, 0.84, 0.44, 1),
+              transform 0.3s cubic-bezier(0.165, 0.84, 0.44, 1);
+}
+
+/* Background toggle */
+.plum-transition-bg {
+  transition: background-color 0.4s cubic-bezier(0.47, 0, 0.745, 0.715);
+}
+
+/* Slide/reveal */
+.plum-transition-reveal {
+  transition: opacity 0.3s cubic-bezier(0.455, 0.03, 0.515, 0.955),
+              transform 0.4s cubic-bezier(0.455, 0.03, 0.515, 0.955);
+}
+
+/* ════════════════════════════════════════════════════════════
+   REACT FLOW DARK OVERRIDES
+   ════════════════════════════════════════════════════════════ */
 .react-flow__renderer { background: transparent; }
 .react-flow__background { background-color: transparent; }
 
-.react-flow__edge-path {
-  stroke: #2A2550;
-  stroke-width: 2;
-}
-
+.react-flow__edge-path { stroke: #570e40; stroke-width: 2; }
 .react-flow__edge.animated .react-flow__edge-path {
-  stroke: var(--plum-primary);
+  stroke: #7b4067;
   stroke-dasharray: 6;
   animation: dashdraw 0.5s linear infinite;
 }
 
 .react-flow__handle {
-  background: #2A2550 !important;
+  background: #570e40 !important;
   width: 8px !important;
   height: 8px !important;
-  border: 2px solid #3A3568 !important;
+  border: 2px solid #7b4067 !important;
 }
-
-.react-flow__handle-left  { left: -5px !important; }
+.react-flow__handle-left  { left:  -5px !important; }
 .react-flow__handle-right { right: -5px !important; }
 
 .react-flow__controls {
-  background: var(--bg-card) !important;
-  border: 1px solid var(--border) !important;
-  border-radius: 8px !important;
+  background: #340926 !important;
+  border: 1px solid #570e40 !important;
+  border-radius: 10px !important;
   box-shadow: none !important;
 }
-
 .react-flow__controls button {
   background: transparent !important;
   border: none !important;
-  border-bottom: 1px solid var(--border) !important;
-  color: #8B87B5 !important;
+  border-bottom: 1px solid #460932 !important;
+  color: #9e708c !important;
   width: 28px !important;
   height: 28px !important;
 }
-
 .react-flow__controls button:last-child { border-bottom: none !important; }
-.react-flow__controls button:hover { background: #2A2550 !important; color: #F2F0FF !important; }
+.react-flow__controls button:hover { background: #3a0e2b !important; color: #fff !important; }
 
 @keyframes dashdraw { to { stroke-dashoffset: -12; } }
 
-/* ── Scrollbar ─────────────────────────────────────────────────── */
+/* ════════════════════════════════════════════════════════════
+   SCROLLBAR
+   ════════════════════════════════════════════════════════════ */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: var(--bg-base); }
-::-webkit-scrollbar-thumb { background: #2A2550; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #3A3568; }
+::-webkit-scrollbar-track { background: #11040d; }
+::-webkit-scrollbar-thumb { background: #460932; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #570e40; }
+::selection { background: rgba(123,64,103,0.35); }
 
-/* ── Selection ─────────────────────────────────────────────────── */
-::selection { background: rgba(124, 92, 252, 0.3); }
+/* ════════════════════════════════════════════════════════════
+   RESPONSIVE BREAKPOINTS  (from Plum's Webflow CSS)
+   ════════════════════════════════════════════════════════════ */
+.plum-container { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
+
+@media (max-width: 991px) {
+  .plum-container { max-width: 728px; }
+  .plum-nav-menu  { display: none; }
+  .plum-nav-hamburger { display: flex !important; }
+}
+
+@media (max-width: 767px) {
+  .plum-col       { width: 100%; margin-left: 0; margin-right: 0; }
+  .plum-nav-logo-area { padding-left: 10px; }
+}
+
+@media (max-width: 479px) {
+  .plum-container { max-width: none; }
+  .plum-col       { width: 100%; }
+}
