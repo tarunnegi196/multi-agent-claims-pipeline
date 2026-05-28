@@ -1,7 +1,7 @@
 """
 GeminiClassifierProvider — classifies a document image into a DocumentType.
 
-Uses Gemini 2.0 Flash with a concise classification prompt.
+Uses Gemini 2.5 Flash Lite with a concise classification prompt.
 Falls back to DocumentType.UNKNOWN on failure (the verifier then catches
 the missing required type and gives the member an actionable message).
 """
@@ -17,22 +17,70 @@ from app.models.document import DocumentType
 logger = logging.getLogger(__name__)
 
 _CLASSIFY_PROMPT = """\
-Classify this medical document image into exactly one category.
+You are classifying an Indian medical document image for a health insurance claims system.
+Return ONLY valid JSON — no explanation, no markdown fences:
+{{"document_type": "CATEGORY", "confidence": 0.0, "signals": ["key visual clues you used"]}}
 
-Return ONLY valid JSON — no explanation, no markdown:
-{{"document_type": "CATEGORY", "confidence": 0.0}}
+━━━ CATEGORIES (pick exactly one) ━━━
 
-Valid categories (pick one):
-PRESCRIPTION         - Doctor's Rx / prescription slip
-HOSPITAL_BILL        - Hospital or clinic invoice/receipt
-LAB_REPORT           - Laboratory or diagnostic test report
-PHARMACY_BILL        - Pharmacy/chemist invoice
-DISCHARGE_SUMMARY    - Hospital discharge summary
-DENTAL_REPORT        - Dental treatment report or dental X-ray report
-DIAGNOSTIC_REPORT    - Radiology or imaging report (MRI/CT/X-ray)
-UNKNOWN              - Cannot determine
+PRESCRIPTION
+  Visual signals: doctor's letterhead with name + degree + registration number,
+  "Rx" or "℞" symbol, medicine list with dosages (Tab/Cap/Syp/Inj),
+  frequency notation (1-0-1, BD, TDS, OD), patient name + age + date,
+  doctor's signature + stamp at bottom.
+  Indian variants: handwritten on plain paper, pre-printed Rx pads,
+  stamps with "KA/", "MH/", "DL/" registration codes.
 
-Confidence: 0.0–1.0. Use 0.9+ when you are certain, 0.6–0.89 for likely, below 0.6 for uncertain.
+HOSPITAL_BILL
+  Visual signals: hospital/clinic name as header, "BILL", "RECEIPT", or "INVOICE"
+  title, itemised table (Description | Qty | Rate | Amount), subtotal + total rows,
+  GSTIN number (15 chars starting with state code), cashier stamp or signature.
+  Indian variants: handwritten bills from small clinics, UPI QR code visible,
+  "Dr [Name] Clinic" letterhead, amounts in ₹ or Rs.
+
+LAB_REPORT
+  Visual signals: diagnostic lab name as header, "NABL Accredited" logo or text,
+  tabular results with columns (Test Name | Result | Unit | Normal Range),
+  patient barcode/sample ID, pathologist's signature + "MD Pathology" credentials,
+  "Reported by:", "Verified by:" at bottom.
+  Indian variants: Quest, SRL, Thyrocare, Metropolis, Dr. Lal Path Labs branding,
+  CBC / LFT / KFT / Lipid Profile / HbA1c result tables.
+
+PHARMACY_BILL
+  Visual signals: pharmacy/chemist shop name as header, "Drug Lic. No:" or
+  "D.L. No:" license number, medicine table (Medicine | Batch | Expiry | Qty | MRP | Amount),
+  batch numbers + expiry dates, pharmacist name + stamp.
+  Indian variants: MedPlus, Apollo Pharmacy, 1mg branding, handwritten chits
+  from local medical shops.
+
+DISCHARGE_SUMMARY
+  Visual signals: hospital letterhead, "DISCHARGE SUMMARY" or "DISCHARGE CARD" title,
+  admission date + discharge date both present, "Diagnosis on Admission",
+  "Diagnosis at Discharge", procedure list, "Condition on Discharge",
+  attending doctor's name.
+
+DENTAL_REPORT
+  Visual signals: dental clinic name, tooth chart or diagram, FDI tooth numbers
+  (11–48) or Universal numbers (1–32), procedure names like "RCT", "Extraction",
+  "Scaling", "Crown", "Filling", X-ray image or X-ray report text,
+  "BDS", "MDS" dentist qualification.
+
+DIAGNOSTIC_REPORT
+  Visual signals: "MRI", "CT Scan", "X-Ray", "Ultrasound", "PET Scan", "ECG",
+  "Echo", "2D Echo" in title or header. Radiologist name with "DMRD", "MD Radiology",
+  "DNB Radiology" credentials. "Impression:", "Findings:", "Opinion:" sections.
+  AERB registration number may be visible.
+
+UNKNOWN
+  Use only when the document is completely illegible, is clearly not a medical document,
+  or could equally match two or more categories.
+
+━━━ CONFIDENCE GUIDE ━━━
+  0.95–1.00 : Multiple strong visual signals clearly match one category.
+  0.80–0.94 : Primary signals match, minor ambiguity (e.g. combined bill+prescription).
+  0.60–0.79 : Likely match but image quality or unusual format reduces certainty.
+  0.40–0.59 : Weak match; only one or two partial signals visible.
+  < 0.40    : Very uncertain — lean towards UNKNOWN.
 """
 
 _TIMEOUT_SECONDS = 15
@@ -51,11 +99,11 @@ class GeminiClassifierProvider:
                 import google.generativeai as genai
                 genai.configure(api_key=settings.gemini_api_key)
                 self._model = genai.GenerativeModel(
-                    model_name="gemini-2.0-flash",
+                    model_name=settings.gemini_classifier_model,
                     generation_config={"response_mime_type": "application/json", "temperature": 0.0},
                 )
                 self._ready = True
-                logger.info("GeminiClassifierProvider ready")
+                logger.info("GeminiClassifierProvider ready (model=%s)", settings.gemini_classifier_model)
             except Exception as exc:
                 logger.warning("GeminiClassifierProvider init failed: %s", exc)
 
@@ -89,8 +137,8 @@ class GeminiClassifierProvider:
                            mime_type: str) -> tuple[DocumentType, float]:
         size_kb = len(file_bytes) / 1024
         logger.info(
-            "[GEMINI-CLASSIFY] CALL  model=gemini-2.0-flash  size=%.1fKB  mime=%s",
-            size_kb, mime_type,
+            "[GEMINI-CLASSIFY] CALL  model=%s  size=%.1fKB  mime=%s",
+            settings.gemini_classifier_model, size_kb, mime_type,
         )
         t0 = asyncio.get_event_loop().time()
 

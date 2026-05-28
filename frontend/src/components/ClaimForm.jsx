@@ -400,6 +400,7 @@ export default function ClaimForm({ onSubmit, isSubmitting }) {
           </svg>Processing…</>
         ) : 'Submit Claim'}
       </button>
+
     </form>
   )
 }

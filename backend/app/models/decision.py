@@ -72,6 +72,14 @@ class Decision(BaseModel):
     eligibility_date: Optional[str] = None
 
 
+class DocumentSummary(BaseModel):
+    """Minimal doc info carried in FinalOutput so the UI can offer region visualisation."""
+    file_id: str
+    file_name: str
+    doc_type: str       # e.g. PRESCRIPTION, HOSPITAL_BILL
+    viewable: bool      # True only when a real file was uploaded (not a JSON stub)
+
+
 class FinalOutput(BaseModel):
     """Top-level response returned by POST /claims and stored in SQLite."""
     claim_id: str
@@ -84,3 +92,4 @@ class FinalOutput(BaseModel):
     processing_time_ms: int
     pipeline_complete: bool = True
     degraded_components: list[str] = []
+    documents: list[DocumentSummary] = []  # populated from claim.documents + classified_docs

@@ -33,6 +33,9 @@ class ClaimHistory(BaseModel):
 
 
 class ClaimSubmission(BaseModel):
+    # Optional: client may pre-generate the ID so it can subscribe to the live SSE
+    # stream before POSTing. If omitted the server generates one.
+    claim_id: Optional[str] = None
     member_id: str
     policy_id: str
     claim_category: ClaimCategory

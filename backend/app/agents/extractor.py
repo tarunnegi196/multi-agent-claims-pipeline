@@ -61,16 +61,50 @@ def _extracted_to_fused(ex: ExtractedDoc) -> FusedDoc:
     return FusedDoc(
         file_id=ex.file_id,
         document_type=ex.document_type,
+        # Shared
         patient_name=ex.patient_name,
+        patient_age=ex.patient_age,
+        patient_gender=ex.patient_gender,
         date=ex.date,
+        # Prescription
         doctor_name=ex.doctor_name,
+        doctor_specialization=ex.doctor_specialization,
         doctor_registration=ex.doctor_registration,
+        chief_complaint=ex.chief_complaint,
         diagnosis=ex.diagnosis,
         medicines=ex.medicines,
+        medicine_details=ex.medicine_details,
         tests_ordered=ex.tests_ordered,
+        # Hospital bill
         hospital_name=ex.hospital_name,
+        hospital_address=ex.hospital_address,
+        gstin=ex.gstin,
+        bill_number=ex.bill_number,
         line_items=ex.line_items,
+        subtotal_amount=ex.subtotal_amount,
+        discount_amount=ex.discount_amount,
         total_amount=ex.total_amount,
+        payment_mode=ex.payment_mode,
+        # Pharmacy
+        pharmacy_name=ex.pharmacy_name,
+        drug_license_number=ex.drug_license_number,
+        net_amount=ex.net_amount,
+        # Lab / diagnostic
+        lab_name=ex.lab_name,
+        lab_id=ex.lab_id,
+        nabl_accredited=ex.nabl_accredited,
+        sample_date=ex.sample_date,
+        report_date=ex.report_date,
+        sample_id=ex.sample_id,
+        pathologist_name=ex.pathologist_name,
+        pathologist_registration=ex.pathologist_registration,
+        test_results=ex.test_results,
+        # Quality signals
+        language_detected=ex.language_detected,
+        quality_flags=ex.quality_flags,
+        document_alteration_detected=ex.document_alteration_detected,
+        duplicate_stamp_detected=ex.duplicate_stamp_detected,
+        # Metadata
         overall_confidence=ex.overall_confidence,
         flags=ex.flags,
     )

@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from app.config import settings
 from app.db.bus import event_bus
@@ -66,6 +66,61 @@ async def upload_file(file: UploadFile = File(...)) -> dict:
         "content_type": content_type,
         "size_bytes": len(content),
     }
+
+
+_MIME_BY_SUFFIX = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".png": "image/png",  ".webp": "image/webp",
+    ".pdf": "application/pdf",
+}
+
+
+# ── File serving ──────────────────────────────────────────────────────────────
+
+@router.get("/api/files/{file_id}")
+async def serve_file(file_id: str) -> Response:
+    """Serve a previously uploaded file by its file_id (UUID)."""
+    matches = list(Path(settings.upload_dir).glob(f"{file_id}.*"))
+    if not matches:
+        raise HTTPException(status_code=404, detail=f"File '{file_id}' not found")
+    file_path = matches[0]
+    media_type = _MIME_BY_SUFFIX.get(file_path.suffix.lower(), "application/octet-stream")
+    return Response(content=file_path.read_bytes(), media_type=media_type)
+
+
+# ── On-demand bounding-box regions ────────────────────────────────────────────
+# Completely separate from the claim pipeline.
+# Called only when the user clicks "View regions" in the UI.
+
+@router.get("/api/files/{file_id}/regions")
+async def get_document_regions(file_id: str, doc_type: str = "UNKNOWN") -> dict:
+    """
+    Detect and return field bounding boxes for a single uploaded document.
+
+    Query param:
+      doc_type — DocumentType hint (PRESCRIPTION, HOSPITAL_BILL, etc.)
+
+    Response:
+      {file_id, doc_type, regions: [{field, value, bbox:[y1,x1,y2,x2], category}]}
+    """
+    matches = list(Path(settings.upload_dir).glob(f"{file_id}.*"))
+    if not matches:
+        raise HTTPException(status_code=404, detail=f"File '{file_id}' not found")
+
+    file_path = matches[0]
+    mime_type = _MIME_BY_SUFFIX.get(file_path.suffix.lower(), "image/jpeg")
+    file_bytes = file_path.read_bytes()
+
+    from app.models.document import DocumentType
+    from app.providers.gemini_vision import gemini_vision
+
+    try:
+        dtype = DocumentType(doc_type.upper())
+    except ValueError:
+        dtype = DocumentType.UNKNOWN
+
+    regions = await gemini_vision.extract_with_bboxes(file_id, dtype, file_bytes, mime_type)
+    return {"file_id": file_id, "doc_type": dtype.value, "regions": regions}
 
 
 # ── SSE live trace stream ─────────────────────────────────────────────────────
