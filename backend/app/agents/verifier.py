@@ -13,7 +13,7 @@ import logging
 import time
 
 from app.models.graph_state import GraphState
-from app.models.document import DocumentQuality
+from app.models.document import DocumentQuality, DocumentType
 from app.models.trace import TraceEvent, TraceStatus
 from app.engine.policy_loader import load_policy
 from app.db.bus import event_bus
@@ -76,15 +76,50 @@ async def verify_node(state: GraphState) -> dict:
         return {"verification_ok": True, "halt": False, "trace": events}
 
     required_types = set(doc_reqs[category].required)
-    provided_types = {d.document_type.value for d in classified}
+    # Documents the classifier could not identify at all → treat as a
+    # readability problem, not a "wrong document" problem.
+    unknown_docs = [d for d in classified if d.document_type == DocumentType.UNKNOWN]
+    provided_types = {
+        d.document_type.value for d in classified
+        if d.document_type != DocumentType.UNKNOWN
+    }
     missing = required_types - provided_types
+    required_desc = ", ".join(sorted(required_types))
 
+    # ── Case A: one or more documents could not be read / identified ─────────
+    # Gemini returned UNKNOWN (blurry, dark, cropped, or not a clear medical
+    # document). Tell the member exactly which file(s) to re-upload — never a
+    # generic "missing document type" message that hides the real cause.
+    if unknown_docs and missing:
+        unreadable_names = ", ".join(f"'{d.file_name}'" for d in unknown_docs)
+        msg = (
+            f"We could not read or identify the following document(s): {unreadable_names}. "
+            f"The image is likely blurry, too dark, cropped, or not a clear medical "
+            f"document. Please re-upload a clear, well-lit photo or scan of each of these "
+            f"specific file(s) and resubmit — you do not need to re-upload documents that "
+            f"were read correctly. Your {category} claim requires: {required_desc}."
+        )
+        logger.warning("[VERIFY] HALT  unreadable_unknown  files=%s  required=%s",
+                       unreadable_names, sorted(required_types))
+        events.append(await _pub(
+            claim_id, "verify.type_check", TraceStatus.FAIL,
+            detail=f"Could not identify document(s): {unreadable_names}",
+            rule="document_quality",
+        ))
+        return {
+            "verification_ok": False,
+            "halt": True,
+            "halt_message": msg,
+            "trace": events,
+        }
+
+    # ── Case B: documents are legible & identified, but a required type is
+    # genuinely absent (e.g., two prescriptions when a hospital bill is needed) ─
     if missing:
         uploaded_desc = ", ".join(
             f"{d.document_type.value} ('{d.file_name}')" for d in classified
         )
         missing_desc = ", ".join(sorted(missing))
-        required_desc = ", ".join(sorted(required_types))
         msg = (
             f"Your {category} claim requires these document types: {required_desc}. "
             f"You uploaded: {uploaded_desc}. "
