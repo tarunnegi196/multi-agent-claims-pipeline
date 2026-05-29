@@ -258,15 +258,19 @@ async def extract_node(state: GraphState) -> dict:
     unique_names = {name for _, name in named_docs}
 
     if len(unique_names) > 1:
+        # Describe each document by its human-readable type + the patient name
+        # found on it (e.g. "the PRESCRIPTION is for 'Rajesh Kumar'") — never
+        # raw file UUIDs, which mean nothing to the member.
         name_details = "; ".join(
-            f"'{f.file_id}' ({f.document_type.value}): '{name}'"
+            f"the {f.document_type.value.replace('_', ' ').lower()} is for '{name}'"
             for f, name in named_docs
         )
+        distinct = ", ".join(f"'{n}'" for n in sorted(unique_names))
         msg = (
-            f"The uploaded documents belong to different patients. "
-            f"Patient names found: {name_details}. "
+            f"The uploaded documents belong to different patients — {name_details}. "
+            f"We found {len(unique_names)} different patient names ({distinct}). "
             f"All documents in a single claim must belong to the same patient. "
-            f"Please re-upload the correct documents and resubmit."
+            f"Please re-upload the correct documents for one patient and resubmit."
         )
         event = _make_event(claim_id, "extract.patient_check", TraceStatus.FAIL,
                             detail=f"Patient name mismatch: {sorted(unique_names)}")
