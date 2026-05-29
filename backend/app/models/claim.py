@@ -39,8 +39,11 @@ class ClaimSubmission(BaseModel):
     member_id: str
     policy_id: str
     claim_category: ClaimCategory
-    treatment_date: date
-    claimed_amount: float = Field(gt=0)
+    # treatment_date and claimed_amount are optional in submission: if absent,
+    # the pipeline derives them from extracted document data. They will be
+    # populated by the orchestrator before the policy engine runs.
+    treatment_date: Optional[date] = None
+    claimed_amount: Optional[float] = None
     hospital_name: Optional[str] = None
     ytd_claims_amount: float = 0.0
     claims_history: list[ClaimHistory] = []

@@ -4,20 +4,42 @@ import PipelineGraph from '../components/PipelineGraph'
 import ClaimForm     from '../components/ClaimForm'
 import TraceLog      from '../components/TraceLog'
 import DecisionCard  from '../components/DecisionCard'
+import DocumentRegionViewer from '../components/DocumentRegionViewer'
 import { submitClaim, getClaim, replayTrace, streamLiveTrace } from '../api'
 
-const AGENTS = ['IntakeAgent','DocClassifierAgent','DocVerifierAgent','ExtractionAgent','FraudScreenAgent','DecisionComposerAgent']
+const AGENTS = [
+  'IntakeAgent', 'DocClassifierAgent', 'DocVerifierAgent',
+  'ExtractionAgent', 'ConsistencyAgent', 'FraudScreenAgent',
+  'DecisionComposerAgent', 'ReportAgent',
+]
 const IDLE_STATES = Object.fromEntries(AGENTS.map((a) => [a, 'idle']))
 const IDLE_EVENTS = Object.fromEntries(AGENTS.map((a) => [a, []]))
 const deriveStatus = (s) => s === 'PASS' ? 'pass' : s === 'FAIL' ? 'fail' : s === 'WARN' ? 'warn' : 'skip'
 
+// Reduce a list of events for one agent down to its terminal status, preserving
+// the "worst" signal (fail > warn > pass > skip). Used to finalise the light
+// when the pipeline moves past an agent so it never gets stuck on "Running".
+function reduceAgentStatus(events) {
+  if (!events || events.length === 0) return 'idle'
+  let result = 'skip'
+  for (const e of events) {
+    const s = deriveStatus(e.status)
+    if (s === 'fail') return 'fail'
+    if (s === 'warn' && result !== 'fail') result = 'warn'
+    else if (s === 'pass' && result !== 'fail' && result !== 'warn') result = 'pass'
+  }
+  return result
+}
+
 const AGENT_META = {
-  IntakeAgent:           { step: 1, label: 'Intake Agent',       desc: 'Validates member ID, claimed amount and document presence before any LLM work begins.' },
-  DocClassifierAgent:    { step: 2, label: 'Doc Classifier',      desc: 'Assigns a document type (PRESCRIPTION, HOSPITAL_BILL…) to each uploaded file.' },
-  DocVerifierAgent:      { step: 3, label: 'Doc Verifier',        desc: 'THE GATE — checks document quality and completeness. Halts with a specific message on failure.' },
-  ExtractionAgent:       { step: 4, label: 'Extraction Agent',    desc: 'Calls Gemini Vision to extract structured fields (patient, diagnosis, amounts) from each document.' },
-  FraudScreenAgent:      { step: 5, label: 'Fraud Screen',        desc: 'Runs deterministic fraud checks: same-day claims, monthly count, high-value flag, alteration marks.' },
-  DecisionComposerAgent: { step: 6, label: 'Decision Composer',   desc: 'Calls the deterministic policy engine and assembles the final approved/rejected/partial verdict.' },
+  IntakeAgent:           { step: 1, label: 'Intake',            isLLM: false, desc: 'Validates that the employee ID is in the policy roster and at least one document was uploaded. No LLM call — pure rule check.' },
+  DocClassifierAgent:    { step: 2, label: 'Classifier Agent',  isLLM: true,  desc: 'Gemini classifies every uploaded file into a document type (PRESCRIPTION, HOSPITAL_BILL, LAB_REPORT…) and rates image readability.' },
+  DocVerifierAgent:      { step: 3, label: 'Verifier',          isLLM: false, desc: 'THE GATE — confirms every required document type for this claim category is present and readable. Halts with a precise actionable message if not.' },
+  ExtractionAgent:       { step: 4, label: 'Extraction Agent',  isLLM: true,  desc: 'Gemini Vision pulls structured fields (patient, doctor, diagnosis, amounts, dates) and bounding boxes from every document in parallel.' },
+  ConsistencyAgent:      { step: 5, label: 'Consistency Agent', isLLM: true,  desc: 'Gemini compares patient, doctor, hospital and date across all documents to catch semantic mismatches a string compare would miss.' },
+  FraudScreenAgent:      { step: 6, label: 'Fraud Screen',      isLLM: false, desc: 'Deterministic signals: same-day claim count, monthly count, high-value threshold, document alteration flags, and cross-doc consistency warnings.' },
+  DecisionComposerAgent: { step: 7, label: 'Decision',          isLLM: false, desc: 'Deterministic policy engine — applies waiting periods, exclusions, network discount, copay, sub-limits to produce verdict + amount.' },
+  ReportAgent:           { step: 8, label: 'Report Agent',      isLLM: true,  desc: 'Gemini synthesises a human-readable narrative, a confidence-reasoning paragraph and a prioritised list of next-best-actions.' },
 }
 
 const STATUS_DOT = {
@@ -58,11 +80,15 @@ function LeftPanel({ title, subtitle, action, children, dark = false }) {
 }
 
 /* ── Agent Inspector (shown inside the modal) ───────────────────── */
-function AgentInspector({ selectedAgent, nodeStates, nodeEvents, onClose }) {
+function AgentInspector({ selectedAgent, nodeStates, nodeEvents, documents, onPreviewRegions, onClose }) {
   const meta   = AGENT_META[selectedAgent] || { step: '?', label: selectedAgent, desc: '' }
   const status = nodeStates[selectedAgent] || 'idle'
   const events = nodeEvents[selectedAgent] || []
   const sd     = STATUS_DOT[status] || STATUS_DOT.idle
+
+  // For ExtractionAgent: index documents by file_id so events can offer a region preview.
+  const docByFileId = {}
+  ;(documents || []).forEach((d) => { if (d.viewable) docByFileId[d.file_id] = d })
 
   const lastConf  = events.length > 0 ? events[events.length - 1].confidence : null
   const totalMs   = events.reduce((s, e) => s + (e.duration_ms || 0), 0)
@@ -83,7 +109,14 @@ function AgentInspector({ selectedAgent, nodeStates, nodeEvents, onClose }) {
               background: 'rgba(190,160,179,0.12)', border: '1px solid #460932',
               borderRadius: 99, padding: '2px 10px',
             }}>
-              Step {meta.step} of 6
+              Step {meta.step} of 8
+              {meta.isLLM && (
+                <span style={{
+                  background: '#570e40', color: '#fff', borderRadius: 4,
+                  padding: '1px 6px', fontSize: 9, fontWeight: 800, letterSpacing: 0.4,
+                  marginLeft: 6,
+                }}>LLM</span>
+              )}
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: sd.color, fontWeight: 600 }}>
               <span style={{
@@ -146,6 +179,9 @@ function AgentInspector({ selectedAgent, nodeStates, nodeEvents, onClose }) {
           events.map((evt, i) => {
             const statusColors = { PASS: '#92bd33', FAIL: '#ff4052', WARN: '#ffbf21', SKIP: '#9e708c' }
             const c = statusColors[evt.status] || '#9e708c'
+            // Detect extraction events tied to an uploaded file → offer region preview
+            const extractMatch = selectedAgent === 'ExtractionAgent' && /^extract\.([^.]+)$/.exec(evt.step_id || '')
+            const previewDoc = extractMatch ? docByFileId[extractMatch[1]] : null
             return (
               <div key={i} style={{ padding: '10px 24px', borderBottom: '1px solid #2c0b21',
                 display: 'flex', alignItems: 'flex-start', gap: 12 }}>
@@ -164,6 +200,25 @@ function AgentInspector({ selectedAgent, nodeStates, nodeEvents, onClose }) {
                   </div>
                   {evt.detail && (
                     <div style={{ fontSize: 13, color: '#d8c5d1', lineHeight: '17px' }}>{evt.detail}</div>
+                  )}
+                  {previewDoc && (
+                    <button
+                      onClick={() => onPreviewRegions?.(previewDoc)}
+                      title="Show this document with bounding boxes around each extracted field"
+                      style={{
+                        marginTop: 6,
+                        display: 'inline-flex', alignItems: 'center', gap: 5,
+                        background: 'rgba(74,144,226,0.08)', border: '1px solid rgba(74,144,226,0.35)',
+                        borderRadius: 99, padding: '3px 10px', cursor: 'pointer',
+                        fontSize: 10, fontWeight: 700, color: '#4a90e2',
+                        transition: 'background 0.1s, border-color 0.1s',
+                        fontFamily: 'Inter, Arial, sans-serif',
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(74,144,226,0.18)' }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(74,144,226,0.08)' }}
+                    >
+                      &#9681; Preview extracted regions
+                    </button>
                   )}
                   {evt.error && (
                     <div style={{ fontSize: 12, color: '#ff4052', marginTop: 3, fontFamily: 'monospace',
@@ -209,6 +264,7 @@ export default function SubmitPage() {
   const [currentAgent,  setCurrent]     = useState(null)
   const [replayActive,  setReplayActive]= useState(false)
   const [selectedAgent, setSelected]   = useState(null)
+  const [regionViewer, setRegionViewer]= useState(null) // {fileId, docType, fileName}
   const cleanupRef   = useRef(null)
   const skipReplayRef = useRef(false) // true when live SSE already updated the graph
 
@@ -224,16 +280,34 @@ export default function SubmitPage() {
       speed: 2.0,
       onEvent(evt) {
         setAllEvents((p) => [...p, evt])
+        setNodeEvents((p) => {
+          const nextEvents = { ...p, [evt.agent]: [...(p[evt.agent] || []), evt] }
+          // Finalise EVERY other agent's state from its accumulated events so
+          // a previously-active agent never gets stuck on the "Running" light
+          // when the pipeline moves past it.
+          setNodeStates((ps) => {
+            const next = { ...ps }
+            for (const a of AGENTS) {
+              if (a === evt.agent) {
+                next[a] = 'active'
+              } else if (nextEvents[a]?.length) {
+                next[a] = reduceAgentStatus(nextEvents[a])
+              }
+            }
+            return next
+          })
+          return nextEvents
+        })
         setCurrent(evt.agent)
-        setNodeEvents((p) => ({ ...p, [evt.agent]: [...(p[evt.agent] || []), evt] }))
-        setNodeStates((p) => ({ ...p, [evt.agent]: 'active' }))
       },
       onDone() {
-        setAllEvents((prev) => {
+        setNodeEvents((nev) => {
           const final = { ...IDLE_STATES }
-          prev.forEach((e) => { final[e.agent] = deriveStatus(e.status) })
+          for (const a of AGENTS) {
+            if (nev[a]?.length) final[a] = reduceAgentStatus(nev[a])
+          }
           setNodeStates(final)
-          return prev
+          return nev
         })
         setCurrent(null); setReplayActive(false)
       },
@@ -257,34 +331,45 @@ export default function SubmitPage() {
     cleanupRef.current?.()
     setSubmitting(true); setError(null); setResult(null)
     setAllEvents([]); setNodeStates(IDLE_STATES); setNodeEvents(IDLE_EVENTS)
-    setCurrent(null); setSelected(null)
+    setSelected(null)
+
+    // Optimistic kick — IntakeAgent starts pulsing immediately so the user
+    // sees motion the moment they click Submit, before the first SSE event lands.
+    setCurrent('IntakeAgent')
+    setNodeStates({ ...IDLE_STATES, IntakeAgent: 'active' })
 
     // 1. Subscribe to live SSE FIRST
     const sseCleanup = streamLiveTrace(claimId, {
       onEvent(evt) {
         setAllEvents((p) => [...p, evt])
+        setNodeEvents((p) => {
+          const nextEvents = { ...p, [evt.agent]: [...(p[evt.agent] || []), evt] }
+          // For every other agent that has finished emitting events, lock in
+          // its terminal status (pass/warn/fail) — only the currently-active
+          // agent stays on the "Running" light.
+          setNodeStates((ps) => {
+            const next = { ...ps }
+            for (const a of AGENTS) {
+              if (a === evt.agent) {
+                next[a] = 'active'
+              } else if (nextEvents[a]?.length) {
+                next[a] = reduceAgentStatus(nextEvents[a])
+              }
+            }
+            return next
+          })
+          return nextEvents
+        })
         setCurrent(evt.agent)
-        setNodeEvents((p) => ({ ...p, [evt.agent]: [...(p[evt.agent] || []), evt] }))
-        // Show fail/warn immediately; keep 'active' for in-progress PASS events
-        const evtStatus = deriveStatus(evt.status)
-        setNodeStates((p) => ({
-          ...p,
-          [evt.agent]: evtStatus === 'fail' || evtStatus === 'warn' ? evtStatus : 'active',
-        }))
       },
       onDone() {
-        // Finalize all agent statuses from the accumulated events
-        setAllEvents((prev) => {
+        setNodeEvents((nev) => {
           const final = { ...IDLE_STATES }
-          prev.forEach((e) => {
-            const s = deriveStatus(e.status)
-            const cur = final[e.agent]
-            if (s === 'fail') final[e.agent] = 'fail'
-            else if (s === 'warn' && cur !== 'fail') final[e.agent] = 'warn'
-            else if (s === 'pass' && cur !== 'fail' && cur !== 'warn') final[e.agent] = 'pass'
-          })
+          for (const a of AGENTS) {
+            if (nev[a]?.length) final[a] = reduceAgentStatus(nev[a])
+          }
           setNodeStates(final)
-          return prev
+          return nev
         })
         setCurrent(null)
       },
@@ -341,7 +426,7 @@ export default function SubmitPage() {
           )}
         >
           {result
-            ? <DecisionCard result={result} processingMs={result.processing_time_ms} />
+            ? <DecisionCard result={result} processingMs={result.processing_time_ms} onNewClaim={handleReset} />
             : <ClaimForm onSubmit={handleSubmit} isSubmitting={isSubmitting} />
           }
         </LeftPanel>
@@ -447,10 +532,22 @@ export default function SubmitPage() {
               selectedAgent={selectedAgent}
               nodeStates={displayStates}
               nodeEvents={nodeEvents}
+              documents={result?.documents || []}
+              onPreviewRegions={(d) => setRegionViewer({ fileId: d.file_id, docType: d.doc_type, fileName: d.file_name })}
               onClose={() => setSelected(null)}
             />
           </div>
         </div>
+      )}
+
+      {/* Region viewer launched from the Extraction agent inspector */}
+      {regionViewer && (
+        <DocumentRegionViewer
+          fileId={regionViewer.fileId}
+          docType={regionViewer.docType}
+          fileName={regionViewer.fileName}
+          onClose={() => setRegionViewer(null)}
+        />
       )}
     </div>
   )

@@ -1,26 +1,17 @@
 /**
- * PipelineGraph — 2×3 serpentine grid of agent cards.
+ * PipelineGraph — 2×4 serpentine grid of pipeline step cards.
  *
- * Layout (snake / serpentine flow — matches execution order):
- *   ┌──────────────┐  →  ┌──────────────┐
- *   │ 1. Intake    │     │ 2. Classify  │
- *   └──────────────┘     └──────────────┘
- *            ↙ (curves down-left)
- *   ┌──────────────┐  →  ┌──────────────┐
- *   │ 3. Verify    │     │ 4. Extract   │
- *   └──────────────┘     └──────────────┘
- *            ↙ (curves down-left)
- *   ┌──────────────┐  →  ┌──────────────┐
- *   │ 5. Fraud     │     │ 6. Decision  │
- *   └──────────────┘     └──────────────┘
+ * LLM nodes keep the "Agent" suffix + a GEMINI badge:
+ *   Classifier Agent · Extraction Agent · Consistency Agent · Report Agent
+ * Deterministic steps drop it: Intake · Verifier · Fraud Screen · Decision
  *
- * Clicking a card emits onNodeClick(agentName).
- * selectedAgent + status colouring are driven by parent state.
+ * Each card shows a status pill (Idle / Running / Passed / Halted / Warning /
+ * Skipped). Clicking a card emits onNodeClick(agentName).
  */
 import { useCallback, useEffect, useState } from 'react'
 import {
   ReactFlow, useNodesState, useEdgesState,
-  Handle, Position, Background, BackgroundVariant,
+  Handle, Position, Background, BackgroundVariant, MarkerType,
 } from '@xyflow/react'
 
 /* ── Agent metadata ──────────────────────────────────────────────── */
@@ -29,36 +20,45 @@ export const AGENT_TO_NODE = {
   DocClassifierAgent:    'classify',
   DocVerifierAgent:      'verify',
   ExtractionAgent:       'extract',
+  ConsistencyAgent:      'consistency',
   FraudScreenAgent:      'fraud',
   DecisionComposerAgent: 'compose',
+  ReportAgent:           'report',
 }
 
+// 2×4 grid. Big cards, generous gaps. Larger cards relative to gaps means
+// fitView renders them bigger in the viewport.
+const CARD_W    = 330
+const GAP_X     = 130                 // horizontal gap between the two columns
+const ROW_H     = 210                 // vertical stride between rows
+const COL_LEFT  = 0
+const COL_RIGHT = CARD_W + GAP_X
+
 const NODE_DEFS = [
-  /* col-left (x=0)  */
-  { id: 'intake',   step: 1, label: 'Intake Agent',        sub: 'Member & amount validation',    agent: 'IntakeAgent',           x: 0,   y: 0,   tooltip: 'Validates member ID, claimed amount and policy eligibility' },
-  { id: 'verify',   step: 3, label: 'Verifier Agent',      sub: 'Quality gate & completeness',   agent: 'DocVerifierAgent',      x: 0,   y: 200, tooltip: 'THE GATE — checks document quality & completeness. Halts on failure.' },
-  { id: 'fraud',    step: 5, label: 'Fraud Screen Agent',  sub: 'Unusual-pattern checks',        agent: 'FraudScreenAgent',      x: 0,   y: 400, tooltip: 'Detects fraud signals: same-day claims, monthly limits, alterations' },
-  /* col-right (x=300) */
-  { id: 'classify', step: 2, label: 'Classifier Agent',    sub: 'Detects each document type',   agent: 'DocClassifierAgent',    x: 300, y: 0,   tooltip: 'Assigns document type to each file (PRESCRIPTION, HOSPITAL_BILL, etc.)' },
-  { id: 'extract',  step: 4, label: 'Extraction Agent',    sub: 'Gemini Vision → structured data', agent: 'ExtractionAgent',    x: 300, y: 200, tooltip: 'Calls Gemini Vision to extract structured fields from documents' },
-  { id: 'compose',  step: 6, label: 'Decision Agent',      sub: 'Policy engine gives verdict',   agent: 'DecisionComposerAgent', x: 300, y: 400, tooltip: 'Calls the deterministic policy engine & assembles final verdict' },
+  { id: 'intake',      step: 1, label: 'Intake',            sub: 'Member & document validation',   agent: 'IntakeAgent',           isLLM: false, x: COL_LEFT,  y: 0 * ROW_H, tooltip: 'Validates member ID & document presence — deterministic, no LLM call.' },
+  { id: 'classify',    step: 2, label: 'Classifier Agent',  sub: 'Gemini detects each doc type',   agent: 'DocClassifierAgent',    isLLM: true,  x: COL_RIGHT, y: 0 * ROW_H, tooltip: 'Gemini classifies each upload as PRESCRIPTION, HOSPITAL_BILL, etc. & rates readability.' },
+  { id: 'verify',      step: 3, label: 'Verifier',          sub: 'Quality gate & completeness',    agent: 'DocVerifierAgent',      isLLM: false, x: COL_LEFT,  y: 1 * ROW_H, tooltip: 'THE GATE — every required doc type must be present & readable. Halts with a precise message if not.' },
+  { id: 'extract',     step: 4, label: 'Extraction Agent',  sub: 'Fields + bounding boxes per doc',agent: 'ExtractionAgent',       isLLM: true,  x: COL_RIGHT, y: 1 * ROW_H, tooltip: 'Gemini Vision pulls every field + bounding box. Derives missing date/amount from bill totals.' },
+  { id: 'consistency', step: 5, label: 'Consistency Agent', sub: 'Cross-document semantic check',  agent: 'ConsistencyAgent',      isLLM: true,  x: COL_LEFT,  y: 2 * ROW_H, tooltip: 'Gemini compares patient, doctor, hospital & dates across all docs — semantic match, not string equality.' },
+  { id: 'fraud',       step: 6, label: 'Fraud Screen',      sub: 'Pattern & rule signals',         agent: 'FraudScreenAgent',      isLLM: false, x: COL_RIGHT, y: 2 * ROW_H, tooltip: 'Same-day · monthly · high-value · document alteration · cross-doc consistency flags.' },
+  { id: 'compose',     step: 7, label: 'Decision',          sub: 'Deterministic policy engine',    agent: 'DecisionComposerAgent', isLLM: false, x: COL_LEFT,  y: 3 * ROW_H, tooltip: 'Policy engine: waiting periods, exclusions, network discount, copay, sub-limits → verdict + amount.' },
+  { id: 'report',      step: 8, label: 'Report Agent',      sub: 'Narrative + next actions',       agent: 'ReportAgent',           isLLM: true,  x: COL_RIGHT, y: 3 * ROW_H, tooltip: 'Gemini synthesises a plain-English narrative, confidence reasoning and prioritised next-best-actions.' },
 ]
 
-/* ── Status styles (Plum exact colours) ─────────────────────────── */
+/* ── Status styles ───────────────────────────────────────────────── */
 const S = {
-  idle:   { border: '#460932', bg: 'rgba(70,9,50,0.3)',    text: '#9e708c', dot: '#7b5068', step: '#7b5068'  },
-  active: { border: '#7b4067', bg: 'rgba(123,64,103,0.35)',text: '#d8c5d1', dot: '#7b4067', step: '#bea0b3'  },
-  pass:   { border: '#92bd33', bg: 'rgba(146,189,51,0.12)',text: '#a9cb62', dot: '#92bd33', step: '#a9cb62'  },
-  fail:   { border: '#ff4052', bg: 'rgba(255,64,82,0.15)', text: '#ffb7bb', dot: '#ff4052', step: '#ff4052'  },
-  warn:   { border: '#ffbf21', bg: 'rgba(255,191,33,0.12)',text: '#ffbf21', dot: '#ffbf21', step: '#ffbf21'  },
-  skip:   { border: '#340926', bg: 'rgba(52,9,38,0.2)',    text: '#570e40', dot: '#340926', step: '#460932'  },
+  idle:   { border: '#460932', bg: 'rgba(70,9,50,0.28)',    text: '#9e708c', dot: '#7b5068', step: '#7b5068', label: 'Idle'    },
+  active: { border: '#9b5080', bg: 'rgba(123,64,103,0.38)', text: '#e8d8e4', dot: '#d4a8c7', step: '#d4a8c7', label: 'Running' },
+  pass:   { border: '#92bd33', bg: 'rgba(146,189,51,0.13)', text: '#b0ce5a', dot: '#92bd33', step: '#92bd33', label: 'Passed'  },
+  fail:   { border: '#ff4052', bg: 'rgba(255,64,82,0.16)',  text: '#ffb7bb', dot: '#ff4052', step: '#ff4052', label: 'Halted'  },
+  warn:   { border: '#ffbf21', bg: 'rgba(255,191,33,0.13)', text: '#ffe06a', dot: '#ffbf21', step: '#ffbf21', label: 'Warning' },
+  skip:   { border: '#340926', bg: 'rgba(52,9,38,0.18)',    text: '#57304a', dot: '#340926', step: '#460932', label: 'Skipped' },
 }
 
 /* ── Custom node ─────────────────────────────────────────────────── */
 function AgentNode({ data, selected }) {
-  const s       = S[data.status] || S.idle
+  const s        = S[data.status] || S.idle
   const isActive = data.status === 'active'
-  const N        = data.step
   const [hovered, setHovered] = useState(false)
 
   return (
@@ -69,82 +69,99 @@ function AgentNode({ data, selected }) {
       style={{
         background:    s.bg,
         border:        `2px solid ${s.border}`,
-        borderRadius:  14,
-        padding:       '14px 16px',
-        width:         220,
-        minHeight:     128,
+        borderRadius:  18,
+        padding:       '18px 22px 18px',
+        width:         CARD_W,
         cursor:        'pointer',
-        outline:       selected ? `2px solid ${s.border}` : 'none',
-        outlineOffset: 4,
+        outline:       selected ? `2.5px solid ${s.border}` : 'none',
+        outlineOffset: 5,
         animation:     isActive ? 'node-glow 1.2s ease-in-out infinite' : 'none',
-        transition:    'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+        transition:    'transform 0.22s cubic-bezier(0.4,0,0.2,1), box-shadow 0.22s cubic-bezier(0.4,0,0.2,1)',
         fontFamily:    'Inter, Arial, sans-serif',
         position:      'relative',
         pointerEvents: 'all',
-        boxShadow:     selected
-          ? `0 0 0 3px ${s.border}33, 0 8px 20px rgba(0,0,0,0.4)`
+        boxShadow: selected
+          ? `0 0 0 4px ${s.border}44, 0 14px 34px rgba(0,0,0,0.55)`
           : hovered
-            ? `0 8px 20px rgba(0,0,0,0.35), inset 0 0 0 2px ${s.border}33`
-            : 'none',
-        transform:     hovered ? 'translateY(-4px) scale(1.02)' : 'translateY(0) scale(1)',
+            ? `0 12px 30px rgba(0,0,0,0.45), inset 0 0 0 1px ${s.border}55`
+            : `0 2px 10px rgba(0,0,0,0.28)`,
+        transform:     hovered ? 'translateY(-5px) scale(1.03)' : 'translateY(0) scale(1)',
         userSelect:    'none',
       }}
     >
       <Handle type="target" position={Position.Left}
-        style={{ background: s.border, border: 'none', width: 8, height: 8 }} />
+        style={{ background: s.border, border: 'none', width: 11, height: 11, left: -6 }} />
 
-      {/* Step badge */}
-      <div style={{
-        position: 'absolute', top: 10, right: 12,
-        fontSize: 11, fontWeight: 800, color: s.step,
-        background: `${s.border}22`, borderRadius: 99,
-        padding: '2px 8px', letterSpacing: '0.04em',
-        border: `1px solid ${s.border}44`,
-      }}>
-        {N} / 6
+      {/* Top bar: step badge left, status pill right */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <span style={{
+          fontSize: 11, fontWeight: 900, color: s.step,
+          background: `${s.border}28`, borderRadius: 99,
+          padding: '4px 12px', letterSpacing: '0.06em',
+          border: `1px solid ${s.border}55`, textTransform: 'uppercase',
+        }}>
+          Step {data.step}
+        </span>
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', gap: 7,
+          fontSize: 11, fontWeight: 800, color: s.step,
+          background: `${s.border}22`, border: `1px solid ${s.border}66`,
+          borderRadius: 99, padding: '4px 12px',
+          letterSpacing: '0.05em', textTransform: 'uppercase',
+        }}>
+          <span style={{
+            width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+            background: s.dot,
+            boxShadow: isActive ? `0 0 9px ${s.dot}` : 'none',
+            animation: isActive ? 'pulse-dot 1.1s ease-in-out infinite' : 'none',
+          }} />
+          {s.label}
+        </span>
       </div>
-
-      {/* Status dot */}
-      <div style={{
-        width: 9, height: 9, borderRadius: '50%',
-        background: s.dot, marginBottom: 8,
-        boxShadow: isActive ? `0 0 10px ${s.dot}` : 'none',
-        transition: 'box-shadow 0.3s',
-      }} />
 
       {/* Label */}
-      <div style={{ fontWeight: 800, fontSize: 14, color: s.text, lineHeight: '18px', marginBottom: 4 }}>
-        {data.label}
-      </div>
-
-      {/* Sub-description */}
-      <div style={{ fontSize: 12, color: '#9e708c', lineHeight: '15px', marginBottom: 10 }}>
-        {data.sub}
-      </div>
-
-      {/* Hover tooltip */}
-      <div style={{
-        fontSize: 11, color: '#d8c5d1', lineHeight: '14px',
-        padding: '8px 10px', borderRadius: 8,
-        background: hovered ? 'rgba(0,0,0,0.3)' : 'transparent',
-        border: hovered ? `1px solid ${s.border}` : 'none',
-        transition: 'all 0.25s ease',
-        minHeight: hovered ? 'auto' : 0,
-        opacity: hovered ? 1 : 0,
-        overflow: 'hidden',
-      }}>
-        {hovered && (
-          <>
-            <span style={{ fontWeight: 600, color: s.text }}>Click to inspect</span>
-            <span style={{ display: 'block', marginTop: 4, fontStyle: 'italic', fontSize: 10, color: '#9e708c' }}>
-              {data.tooltip}
-            </span>
-          </>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 7 }}>
+        <span style={{ fontWeight: 800, fontSize: 18, color: s.text, lineHeight: '22px', letterSpacing: '-0.01em' }}>
+          {data.label}
+        </span>
+        {data.isLLM && (
+          <span style={{
+            background: 'linear-gradient(135deg, #7b0050, #460932)',
+            color: '#ffcce8', borderRadius: 5,
+            padding: '2px 8px', fontSize: 9, fontWeight: 900,
+            letterSpacing: '0.08em', flexShrink: 0,
+            border: '1px solid rgba(190,160,179,0.25)',
+          }}>
+            GEMINI
+          </span>
         )}
       </div>
 
+      {/* Sub-description */}
+      <div style={{ fontSize: 13.5, color: '#9e708c', lineHeight: '18px', marginBottom: 12 }}>
+        {data.sub}
+      </div>
+
+      {/* Hover detail */}
+      <div style={{
+        overflow: 'hidden',
+        maxHeight: hovered ? 90 : 0,
+        opacity: hovered ? 1 : 0,
+        transition: 'max-height 0.22s ease, opacity 0.18s ease',
+      }}>
+        <div style={{
+          fontSize: 12, color: '#c4afc0', lineHeight: '17px',
+          padding: '10px 12px', borderRadius: 10,
+          background: 'rgba(0,0,0,0.32)',
+          border: `1px solid ${s.border}66`,
+        }}>
+          <span style={{ fontWeight: 700, color: s.text, marginRight: 4 }}>↗ Click to inspect</span>
+          {data.tooltip}
+        </div>
+      </div>
+
       <Handle type="source" position={Position.Right}
-        style={{ background: s.border, border: 'none', width: 8, height: 8 }} />
+        style={{ background: s.border, border: 'none', width: 11, height: 11, right: -6 }} />
     </div>
   )
 }
@@ -153,23 +170,30 @@ const nodeTypes = { agent: AgentNode }
 
 /* ── Edge builder ────────────────────────────────────────────────── */
 function buildEdges(ns) {
-  // Serpentine: intake→classify (→right), classify→verify (↙), verify→extract (→right), extract→fraud (↙), fraud→compose (→right)
   const pairs = [
-    { id: 'e1', src: 'intake',   tgt: 'classify', agentKey: 'IntakeAgent'        },
-    { id: 'e2', src: 'classify', tgt: 'verify',   agentKey: 'DocClassifierAgent' },
-    { id: 'e3', src: 'verify',   tgt: 'extract',  agentKey: 'DocVerifierAgent'   },
-    { id: 'e4', src: 'extract',  tgt: 'fraud',    agentKey: 'ExtractionAgent'    },
-    { id: 'e5', src: 'fraud',    tgt: 'compose',  agentKey: 'FraudScreenAgent'   },
+    { id: 'e1', src: 'intake',      tgt: 'classify',    agentKey: 'IntakeAgent'           },
+    { id: 'e2', src: 'classify',    tgt: 'verify',      agentKey: 'DocClassifierAgent'    },
+    { id: 'e3', src: 'verify',      tgt: 'extract',     agentKey: 'DocVerifierAgent'      },
+    { id: 'e4', src: 'extract',     tgt: 'consistency', agentKey: 'ExtractionAgent'       },
+    { id: 'e5', src: 'consistency', tgt: 'fraud',       agentKey: 'ConsistencyAgent'      },
+    { id: 'e6', src: 'fraud',       tgt: 'compose',     agentKey: 'FraudScreenAgent'      },
+    { id: 'e7', src: 'compose',     tgt: 'report',      agentKey: 'DecisionComposerAgent' },
   ]
-
   return pairs.map(({ id, src, tgt, agentKey }) => {
     const status   = ns[agentKey]
     const animated = status === 'active'
-    const color    = status === 'pass' ? '#92bd33' : status === 'fail' ? '#ff4052' : status === 'active' ? '#7b4067' : '#460932'
+    const color = (
+      status === 'pass'   ? '#92bd33' :
+      status === 'fail'   ? '#ff4052' :
+      status === 'warn'   ? '#ffbf21' :
+      status === 'active' ? '#9b5080' :
+      '#460932'
+    )
     return {
       id, source: src, target: tgt, type: 'smoothstep',
       animated,
-      style: { stroke: color, strokeWidth: animated ? 2 : 1.5 },
+      style: { stroke: color, strokeWidth: animated ? 2.5 : 1.5 },
+      markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
     }
   })
 }
@@ -191,6 +215,7 @@ export default function PipelineGraph({ nodeStates = {}, nodeEvents = {}, select
         sub:     def.sub,
         step:    def.step,
         tooltip: def.tooltip,
+        isLLM:   def.isLLM,
         status:  nodeStates[def.agent] ?? 'idle',
         events:  nodeEvents[def.agent]  ?? [],
         onClick: () => handleClick(def.agent),
@@ -206,13 +231,13 @@ export default function PipelineGraph({ nodeStates = {}, nodeEvents = {}, select
         nodes={nodes} edges={edges}
         onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
-        fitView fitViewOptions={{ padding: 0.12 }}
+        fitView fitViewOptions={{ padding: 0.08 }}
         nodesDraggable={false} nodesConnectable={false}
         elementsSelectable={false} panOnDrag={false}
         zoomOnScroll={false} zoomOnPinch={false} zoomOnDoubleClick={false}
         proOptions={{ hideAttribution: true }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="#2c0b21" />
+        <Background variant={BackgroundVariant.Dots} gap={28} size={1.2} color="#2c0b21" />
       </ReactFlow>
     </div>
   )

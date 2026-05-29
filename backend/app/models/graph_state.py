@@ -33,6 +33,12 @@ class GraphState(TypedDict):
     failed_components: Annotated[list[str], operator.add]
     extraction_confidence: float
 
+    # ── Cross-document consistency (set by ConsistencyAgent) ────────────────
+    consistency_flags: list[str]
+
+    # ── Bounding-box regions per file_id (set by ExtractionAgent) ───────────
+    bbox_regions: dict
+
     # ── Flow control ────────────────────────────────────────────────────────
     halt: bool
     halt_message: Optional[str]
