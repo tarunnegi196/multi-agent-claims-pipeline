@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, useNavigate } from 'react-router-dom'
 import SubmitPage  from './pages/SubmitPage'
 import HistoryPage from './pages/HistoryPage'
-import EvalPage    from './pages/EvalPage'
 
 /* ── Navbar ──────────────────────────────────────────────────────── */
 function useApiHealth() {
@@ -91,7 +90,6 @@ function Navbar() {
           {[
             { to: '/',        label: 'New Claim',    end: true  },
             { to: '/history', label: 'History',      end: false },
-            { to: '/eval',    label: 'Eval Report',  end: false },
           ].map(({ to, label, end }) => (
             <NavLink key={to} to={to} end={end} style={navLinkStyle}
               onMouseEnter={(e) => {
@@ -165,7 +163,6 @@ function Navbar() {
           {[
             { to: '/',        label: 'New Claim',    end: true  },
             { to: '/history', label: 'History',      end: false },
-            { to: '/eval',    label: 'Eval Report',  end: false },
           ].map(({ to, label, end }) => (
             <NavLink key={to} to={to} end={end} onClick={() => setMenuOpen(false)}
               style={navLinkStyle}>
@@ -189,7 +186,6 @@ export default function App() {
             <Route path="/"           element={<SubmitPage />} />
             <Route path="/claims/:id" element={<SubmitPage />} />
             <Route path="/history"    element={<HistoryPage />} />
-            <Route path="/eval"       element={<EvalPage />} />
           </Routes>
         </div>
       </div>

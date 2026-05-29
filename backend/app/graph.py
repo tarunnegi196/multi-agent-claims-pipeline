@@ -2,14 +2,13 @@
 LangGraph StateGraph — wires all agents into the claims processing pipeline.
 
 Flow:
-  intake → classify → verify ─[halt?]─► END
-                              └─► extract ─[halt?]─► END
-                                          └─► fraud → compose → END
+  intake → classify → verify ─[halt?]─► report → END
+                              └─► extract ─[halt?]─► report → END
+                                          └─► consistency → fraud → compose → report → END
 
-Conditional routing after verify and extract: any node that sets
-state["halt"]=True causes the pipeline to skip to END without calling
-the remaining nodes. The FastAPI layer builds the final FinalOutput from
-whatever state was accumulated.
+Conditional routing after intake, verify, and extract: any node that sets
+state["halt"]=True jumps to the report node (which still generates a
+narrative for halted claims) then to END.
 """
 from langgraph.graph import StateGraph, END
 
@@ -18,20 +17,22 @@ from app.agents.intake import intake_node
 from app.agents.classifier import classify_node
 from app.agents.verifier import verify_node
 from app.agents.extractor import extract_node
+from app.agents.consistency import consistency_node
 from app.agents.fraud import fraud_node
 from app.agents.composer import compose_node
+from app.agents.reporter import report_node
 
 
 def _route_after_intake(state: GraphState) -> str:
-    return "end" if state.get("halt", False) else "classify"
+    return "report" if state.get("halt", False) else "classify"
 
 
 def _route_after_verify(state: GraphState) -> str:
-    return "end" if state.get("halt", False) else "extract"
+    return "report" if state.get("halt", False) else "extract"
 
 
 def _route_after_extract(state: GraphState) -> str:
-    return "end" if state.get("halt", False) else "fraud"
+    return "report" if state.get("halt", False) else "consistency"
 
 
 def build_graph() -> StateGraph:
@@ -41,29 +42,33 @@ def build_graph() -> StateGraph:
     builder.add_node("classify", classify_node)
     builder.add_node("verify", verify_node)
     builder.add_node("extract", extract_node)
+    builder.add_node("consistency", consistency_node)
     builder.add_node("fraud", fraud_node)
     builder.add_node("compose", compose_node)
+    builder.add_node("report", report_node)
 
     builder.set_entry_point("intake")
 
     builder.add_conditional_edges(
         "intake",
         _route_after_intake,
-        {"end": END, "classify": "classify"},
+        {"report": "report", "classify": "classify"},
     )
     builder.add_edge("classify", "verify")
     builder.add_conditional_edges(
         "verify",
         _route_after_verify,
-        {"end": END, "extract": "extract"},
+        {"report": "report", "extract": "extract"},
     )
     builder.add_conditional_edges(
         "extract",
         _route_after_extract,
-        {"end": END, "fraud": "fraud"},
+        {"report": "report", "consistency": "consistency"},
     )
+    builder.add_edge("consistency", "fraud")
     builder.add_edge("fraud", "compose")
-    builder.add_edge("compose", END)
+    builder.add_edge("compose", "report")
+    builder.add_edge("report", END)
 
     return builder.compile()
 

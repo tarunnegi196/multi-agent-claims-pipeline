@@ -32,3 +32,6 @@ pytest-cov==6.0.0
 # Utilities
 python-dotenv==1.0.1
 tenacity==9.0.0
+
+# PDF report generation (downloadable per-claim report)
+reportlab==4.2.5

@@ -12,14 +12,28 @@ import logging
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.config import settings
-from app.models.document import DocumentType
+from app.models.document import DocumentType, DocumentQuality
 
 logger = logging.getLogger(__name__)
 
 _CLASSIFY_PROMPT = """\
 You are classifying an Indian medical document image for a health insurance claims system.
 Return ONLY valid JSON — no explanation, no markdown fences:
-{{"document_type": "CATEGORY", "confidence": 0.0, "signals": ["key visual clues you used"]}}
+{{
+  "document_type": "CATEGORY",
+  "confidence": 0.0,
+  "signals": ["key visual clues you used"],
+  "quality": "GOOD",
+  "quality_reason": "one-line explanation of readability assessment"
+}}
+
+━━━ QUALITY ASSESSMENT ━━━
+Assess the overall readability of the document BEFORE classifying.
+  GOOD       — all key fields are legible; minor imperfections do not block extraction
+  DEGRADED   — significant blur, partial shadows, or stamps obscure important fields;
+               extraction may be incomplete but the document type is still identifiable
+  UNREADABLE — image is too blurry, too dark/washed out, folded, or otherwise unusable;
+               critical fields cannot be read at all
 
 ━━━ CATEGORIES (pick exactly one) ━━━
 
@@ -111,10 +125,10 @@ class GeminiClassifierProvider:
         return self._ready
 
     async def classify(self, file_id: str, file_bytes: bytes,
-                       mime_type: str = "image/jpeg") -> tuple[DocumentType, float]:
-        """Returns (DocumentType, confidence). Falls back to UNKNOWN on any error."""
+                       mime_type: str = "image/jpeg") -> tuple[DocumentType, float, DocumentQuality]:
+        """Returns (DocumentType, confidence, DocumentQuality). Falls back to UNKNOWN/GOOD on error."""
         if not self._ready:
-            return DocumentType.UNKNOWN, 0.30
+            return DocumentType.UNKNOWN, 0.30, DocumentQuality.GOOD
         try:
             return await asyncio.wait_for(
                 self._call_gemini(file_bytes, mime_type),
@@ -122,19 +136,19 @@ class GeminiClassifierProvider:
             )
         except asyncio.TimeoutError:
             logger.warning("GeminiClassifier timeout for %s", file_id)
-            return DocumentType.UNKNOWN, 0.30
+            return DocumentType.UNKNOWN, 0.30, DocumentQuality.GOOD
         except Exception as exc:
             logger.warning("GeminiClassifier error for %s: %s", file_id, exc)
-            return DocumentType.UNKNOWN, 0.30
+            return DocumentType.UNKNOWN, 0.30, DocumentQuality.GOOD
 
     @retry(
         retry=retry_if_exception_type(Exception),
-        stop=stop_after_attempt(2),
-        wait=wait_exponential(multiplier=1, min=1, max=4),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=8),
         reraise=True,
     )
     async def _call_gemini(self, file_bytes: bytes,
-                           mime_type: str) -> tuple[DocumentType, float]:
+                           mime_type: str) -> tuple[DocumentType, float, DocumentQuality]:
         size_kb = len(file_bytes) / 1024
         logger.info(
             "[GEMINI-CLASSIFY] CALL  model=%s  size=%.1fKB  mime=%s",
@@ -161,12 +175,18 @@ class GeminiClassifierProvider:
             dtype_str = "UNKNOWN"
         confidence = float(data.get("confidence", 0.70))
 
+        quality_str = str(data.get("quality", "GOOD")).upper()
+        try:
+            quality = DocumentQuality(quality_str)
+        except ValueError:
+            quality = DocumentQuality.GOOD
+
         elapsed = asyncio.get_event_loop().time() - t0
         logger.info(
-            "[GEMINI-CLASSIFY] DONE  result=%s  confidence=%.2f  duration=%.2fs",
-            dtype_str, confidence, elapsed,
+            "[GEMINI-CLASSIFY] DONE  result=%s  confidence=%.2f  quality=%s  duration=%.2fs",
+            dtype_str, confidence, quality.value, elapsed,
         )
-        return DocumentType(dtype_str), confidence
+        return DocumentType(dtype_str), confidence, quality
 
 
 # Module singleton

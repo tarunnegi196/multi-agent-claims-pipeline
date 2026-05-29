@@ -139,7 +139,7 @@ class TestGeminiClassifierProvider:
         mock_response.text = '{"document_type": "PRESCRIPTION", "confidence": 0.95}'
         mock_model.generate_content.return_value = mock_response
 
-        dtype, conf = await provider.classify("F001", b"img", "image/jpeg")
+        dtype, conf, quality = await provider.classify("F001", b"img", "image/jpeg")
 
         assert dtype == DocumentType.PRESCRIPTION
         assert conf == pytest.approx(0.95)
@@ -150,7 +150,7 @@ class TestGeminiClassifierProvider:
         mock_response.text = '{"document_type": "BANANA", "confidence": 0.9}'
         mock_model.generate_content.return_value = mock_response
 
-        dtype, conf = await provider.classify("F002", b"img", "image/jpeg")
+        dtype, conf, quality = await provider.classify("F002", b"img", "image/jpeg")
 
         assert dtype == DocumentType.UNKNOWN
 
@@ -160,7 +160,7 @@ class TestGeminiClassifierProvider:
         provider._model = None
         provider._ready = False
 
-        dtype, conf = await provider.classify("F003", b"img", "image/jpeg")
+        dtype, conf, quality = await provider.classify("F003", b"img", "image/jpeg")
 
         assert dtype == DocumentType.UNKNOWN
         assert conf <= 0.35
@@ -168,5 +168,5 @@ class TestGeminiClassifierProvider:
     async def test_timeout_returns_unknown(self):
         provider, mock_model = self._make_provider()
         with patch.object(provider, "_call_gemini", side_effect=asyncio.TimeoutError):
-            dtype, conf = await provider.classify("F004", b"img", "image/jpeg")
+            dtype, conf, quality = await provider.classify("F004", b"img", "image/jpeg")
         assert dtype == DocumentType.UNKNOWN

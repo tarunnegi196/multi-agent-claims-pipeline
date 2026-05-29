@@ -44,6 +44,7 @@ export default function HistoryPage() {
   const [claims,  setClaims]  = useState([])
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState(null)
+  const [query,   setQuery]   = useState('')
   const navigate = useNavigate()
 
   const load = () => {
@@ -51,6 +52,16 @@ export default function HistoryPage() {
     listClaims(100).then(setClaims).catch((e) => setError(e.message)).finally(() => setLoading(false))
   }
   useEffect(load, [])
+
+  // Client-side filter: search across claim_id, member_id, category, date, decision.
+  const q = query.trim().toLowerCase()
+  const filtered = q === '' ? claims : claims.filter((c) => (
+    (c.claim_id        || '').toLowerCase().includes(q) ||
+    (c.member_id       || '').toLowerCase().includes(q) ||
+    (c.claim_category  || '').toLowerCase().includes(q) ||
+    (c.treatment_date  || '').toLowerCase().includes(q) ||
+    (c.decision_type   || '').toLowerCase().includes(q)
+  ))
 
   if (loading) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 240, color: '#9e708c' }}>
@@ -71,14 +82,56 @@ export default function HistoryPage() {
     <div className="plum-container" style={{ paddingTop: 32, paddingBottom: 32, fontFamily: 'Inter, Arial, sans-serif' }}>
 
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16, gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h4 style={{ color: '#d8c5d1', margin: 0, marginBottom: 4 }}>Claims History</h4>
           <p style={{ fontSize: 13, color: '#9e708c', margin: 0 }}>
-            {claims.length} claim{claims.length !== 1 ? 's' : ''} processed
+            {q
+              ? `${filtered.length} of ${claims.length} match "${query.trim()}"`
+              : `${claims.length} claim${claims.length !== 1 ? 's' : ''} processed`}
           </p>
         </div>
         <button onClick={load} className="btn-action" style={{ fontFamily: 'Inter, Arial, sans-serif' }}>↻ Refresh</button>
+      </div>
+
+      {/* Search bar */}
+      <div style={{ position: 'relative', marginBottom: 20 }}>
+        <svg
+          viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2"
+          width="14" height="14"
+          style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#7b5068', pointerEvents: 'none' }}
+        >
+          <circle cx="9" cy="9" r="6" />
+          <path strokeLinecap="round" d="M14 14l4 4" />
+        </svg>
+        <input
+          type="text"
+          placeholder="Search by claim ID, employee ID, category, date or decision…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          style={{
+            width: '100%', padding: '10px 14px 10px 38px', fontSize: 13,
+            background: '#11040d', border: '1px solid #340926', borderRadius: 10,
+            color: '#d8c5d1', outline: 'none',
+            fontFamily: 'Inter, Arial, sans-serif',
+            transition: 'border-color 0.15s, box-shadow 0.15s',
+          }}
+          onFocus={(e) => { e.currentTarget.style.borderColor = '#7b4067'; e.currentTarget.style.boxShadow = '0 0 0 3px rgba(123,64,103,0.18)' }}
+          onBlur={(e)  => { e.currentTarget.style.borderColor = '#340926'; e.currentTarget.style.boxShadow = 'none' }}
+        />
+        {query && (
+          <button
+            onClick={() => setQuery('')}
+            title="Clear search"
+            style={{
+              position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
+              background: 'rgba(70,9,50,0.4)', border: 'none', color: '#bea0b3',
+              cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: '4px 8px', borderRadius: 6,
+            }}
+          >
+            ✕
+          </button>
+        )}
       </div>
 
       {error && (
@@ -95,6 +148,12 @@ export default function HistoryPage() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
           </svg>
           <p style={{ fontSize: 13 }}>No claims yet. Submit your first claim.</p>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div style={{ textAlign: 'center', paddingTop: 60, color: '#9e708c' }}>
+          <p style={{ fontSize: 13 }}>
+            No claims match "<span style={{ color: '#bea0b3' }}>{query}</span>". Try a different search term.
+          </p>
         </div>
       ) : (
         <div style={{ border: '1px solid #340926', borderRadius: 16, overflow: 'hidden', background: '#11040d' }}>
@@ -113,7 +172,7 @@ export default function HistoryPage() {
               </tr>
             </thead>
             <tbody>
-              {claims.map((c, idx) => (
+              {filtered.map((c, idx) => (
                 <tr key={c.claim_id} onClick={() => navigate(`/claims/${c.claim_id}`)}
                   style={{ borderBottom: '1px solid #2c0b21', cursor: 'pointer',
                     background: idx % 2 === 0 ? '#11040d' : '#1d0716',

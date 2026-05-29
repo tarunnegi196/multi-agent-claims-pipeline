@@ -95,19 +95,38 @@ async def serve_file(file_id: str) -> Response:
 @router.get("/api/files/{file_id}/regions")
 async def get_document_regions(file_id: str, doc_type: str = "UNKNOWN") -> dict:
     """
-    Detect and return field bounding boxes for a single uploaded document.
+    Return field bounding boxes for an uploaded document.
 
-    Query param:
-      doc_type — DocumentType hint (PRESCRIPTION, HOSPITAL_BILL, etc.)
+    The ExtractionAgent captures regions inline during the claim pipeline and
+    caches them at {file_id}.regions.json. We serve from cache first; if no
+    cached copy exists (e.g., file was uploaded but the claim hasn't been
+    processed yet) we call Gemini directly.
 
     Response:
       {file_id, doc_type, regions: [{field, value, bbox:[y1,x1,y2,x2], category}]}
     """
-    matches = list(Path(settings.upload_dir).glob(f"{file_id}.*"))
+    matches = [p for p in Path(settings.upload_dir).glob(f"{file_id}.*")
+               if not p.name.endswith(".regions.json")]
     if not matches:
         raise HTTPException(status_code=404, detail=f"File '{file_id}' not found")
 
     file_path = matches[0]
+
+    # Cached regions from the extraction pipeline (no extra Gemini call)
+    cached = file_path.with_suffix(".regions.json")
+    if cached.exists():
+        try:
+            data = json.loads(cached.read_text())
+            return {
+                "file_id": file_id,
+                "doc_type": data.get("doc_type", doc_type),
+                "regions": data.get("regions", []),
+                "source": "cache",
+            }
+        except Exception:
+            pass  # corrupt cache → fall through to live call
+
+    # Fallback: live Gemini call
     mime_type = _MIME_BY_SUFFIX.get(file_path.suffix.lower(), "image/jpeg")
     file_bytes = file_path.read_bytes()
 
@@ -120,7 +139,7 @@ async def get_document_regions(file_id: str, doc_type: str = "UNKNOWN") -> dict:
         dtype = DocumentType.UNKNOWN
 
     regions = await gemini_vision.extract_with_bboxes(file_id, dtype, file_bytes, mime_type)
-    return {"file_id": file_id, "doc_type": dtype.value, "regions": regions}
+    return {"file_id": file_id, "doc_type": dtype.value, "regions": regions, "source": "live"}
 
 
 # ── SSE live trace stream ─────────────────────────────────────────────────────

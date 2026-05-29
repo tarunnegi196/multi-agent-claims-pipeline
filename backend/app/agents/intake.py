@@ -35,8 +35,9 @@ async def intake_node(state: GraphState) -> dict:
     t0 = time.time()
     events: list[TraceEvent] = []
 
-    logger.info("[INTAKE] start  claim_id=%s  member=%s  category=%s  amount=₹%.0f",
-                claim_id, claim.member_id, claim.claim_category.value, claim.claimed_amount)
+    amt_display = f"₹{claim.claimed_amount:.0f}" if claim.claimed_amount else "(to be extracted)"
+    logger.info("[INTAKE] start  claim_id=%s  member=%s  category=%s  amount=%s",
+                claim_id, claim.member_id, claim.claim_category.value, amt_display)
 
     policy = load_policy()
 
@@ -60,9 +61,16 @@ async def intake_node(state: GraphState) -> dict:
                              detail=f"Member '{member.name}' ({claim.member_id}) found",
                              rule="members", confidence=1.0))
 
-    # 2. Minimum claim amount
+    # 2. Minimum claim amount — only enforced if amount was provided up-front.
+    # When the UI submits the simplified 3-input form, claimed_amount is None
+    # and gets derived after extraction; the min-amount check then runs inside
+    # the policy engine.
     min_amt = policy.submission_rules.minimum_claim_amount
-    if claim.claimed_amount < min_amt:
+    if claim.claimed_amount is None:
+        events.append(await _pub(claim_id, "intake.min_amount", TraceStatus.SKIP,
+                                 detail="Amount will be derived from extracted documents",
+                                 rule="submission_rules.minimum_claim_amount"))
+    elif claim.claimed_amount < min_amt:
         events.append(await _pub(claim_id, "intake.min_amount", TraceStatus.FAIL,
                                  detail=f"₹{claim.claimed_amount:.0f} < minimum ₹{min_amt:.0f}",
                                  rule="submission_rules.minimum_claim_amount"))
@@ -75,9 +83,10 @@ async def intake_node(state: GraphState) -> dict:
             ),
             "trace": events,
         }
-    events.append(await _pub(claim_id, "intake.min_amount", TraceStatus.PASS,
-                             detail=f"₹{claim.claimed_amount:.0f} ≥ minimum ₹{min_amt:.0f}",
-                             rule="submission_rules.minimum_claim_amount", confidence=1.0))
+    else:
+        events.append(await _pub(claim_id, "intake.min_amount", TraceStatus.PASS,
+                                 detail=f"₹{claim.claimed_amount:.0f} ≥ minimum ₹{min_amt:.0f}",
+                                 rule="submission_rules.minimum_claim_amount", confidence=1.0))
 
     # 3. Documents attached
     if not claim.documents:

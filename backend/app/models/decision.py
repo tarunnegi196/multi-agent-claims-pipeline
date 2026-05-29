@@ -70,6 +70,12 @@ class Decision(BaseModel):
     fraud_flags: list[str] = []
     component_failures: list[str] = []
     eligibility_date: Optional[str] = None
+    # LLM-enhanced report fields (populated by ReportAgent)
+    narrative: Optional[str] = None
+    confidence_reasoning: Optional[str] = None
+    next_best_actions: list[str] = []
+    # Cross-document consistency check results
+    consistency_flags: list[str] = []
 
 
 class DocumentSummary(BaseModel):
@@ -78,6 +84,7 @@ class DocumentSummary(BaseModel):
     file_name: str
     doc_type: str       # e.g. PRESCRIPTION, HOSPITAL_BILL
     viewable: bool      # True only when a real file was uploaded (not a JSON stub)
+    quality: str = "GOOD"   # GOOD | DEGRADED | UNREADABLE — set by Gemini classifier
 
 
 class FinalOutput(BaseModel):

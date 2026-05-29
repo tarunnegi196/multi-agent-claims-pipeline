@@ -4,45 +4,70 @@ Multi-agent health insurance claims processing system built for the Plum AI Engi
 
 ## Architecture
 
-Seven LangGraph agents process each claim in sequence:
+Eight pipeline steps process each claim. Four are LLM-powered (Gemini); four are deterministic:
 
 ```
-Intake → DocClassifier → DocVerifier (GATE) → Extraction → ConfidenceFusion → FraudScreen → PolicyEngine → DecisionComposer
+Intake → Classifier Agent → Verifier (GATE) → Extraction Agent
+       → Consistency Agent → Fraud Screen → Decision → Report Agent
 ```
 
-**Design thesis:** LLMs extract structured data from messy documents; deterministic Python applies policy rules. Every decision step emits a `TraceEvent` — the decision is a fold over the trace, so the trace and decision can never disagree.
+| # | Step | Type | Role |
+|---|---|---|---|
+| 1 | **Intake** | deterministic | Member roster check · docs present · min-amount |
+| 2 | **Classifier Agent** | Gemini | Doc type + quality per uploaded file |
+| 3 | **Verifier** | deterministic | Required doc types present and readable — halts with precise message if not |
+| 4 | **Extraction Agent** | Gemini Vision | Structured fields + bounding boxes per doc · derives missing date/amount from bills |
+| 5 | **Consistency Agent** | Gemini | Semantic cross-doc check: patient / doctor / hospital / date match |
+| 6 | **Fraud Screen** | deterministic | Same-day · monthly · high-value · alteration · cross-doc consistency flags |
+| 7 | **Decision** | deterministic | Policy engine: waiting periods, exclusions, network discount, copay, sub-limits |
+| 8 | **Report Agent** | Gemini | Narrative · confidence reasoning · next-best-actions |
+
+**Design thesis:** LLMs extract, classify, and narrate. Deterministic Python applies every policy rule. Every decision is a fold over the trace — trace and decision can never disagree.
 
 ## Stack
 
 | Layer | Choice |
 |---|---|
-| Backend | FastAPI (async) + LangGraph |
-| LLM | Gemini 2.5 Flash (vision extraction) |
-| Decision | Deterministic Python engine (reads `data/policy_terms.json`) |
-| Persistence | SQLite + aiosqlite |
-| Frontend | React + Vite + React Flow (live trace viewer) |
+| Orchestration | LangGraph (StateGraph, 8 nodes, conditional halt routing) |
+| Backend | FastAPI (async) + aiosqlite |
+| LLMs | Gemini 2.5 Flash — classification, vision extraction, consistency, report |
+| Policy engine | Deterministic Python (reads `policy_terms.json`) |
+| Observability | TraceEvent bus → SSE live stream → React Flow replay |
+| Frontend | React + Vite + React Flow |
 
 ## Setup
 
 ```bash
 cd backend
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+# Windows:
+.venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env        # add GEMINI_API_KEY
-uvicorn app.main:app --reload
+cp .env.example .env   # add GEMINI_API_KEY
+uvicorn app.main:app --reload --port 8000
+```
+
+Frontend is bundled into the FastAPI static mount. For local dev with hot-reload:
+
+```bash
+cd frontend
+npm install
+npm run dev   # runs on :5173 with VITE_API_BASE=http://localhost:8000
 ```
 
 ## Tests
 
 ```bash
 cd backend
-pytest --cov=app tests/
+pytest tests/ -v
 ```
 
-## Eval
+44 tests across policy engine, database, graph pipeline, and provider mocks.
 
-```bash
-cd backend
-python -m app.eval.run_eval
-```
+## Key design decisions
+
+- **3-input form** — Employee ID + Claim Type + Documents. Treatment date and claimed amount are derived from extracted bill totals and dates when the user doesn't provide them.
+- **Bboxes during extraction** — `extract()` and `extract_with_bboxes()` run in parallel via `asyncio.gather`. Regions are cached to disk so the UI never triggers a second Gemini call when you click "View Regions".
+- **Consistency before Fraud** — cross-document semantic mismatches surface as `consistency_flags` in Fraud Screen's score, not as a hard halt (patient-name hard mismatch is still halted in the Extractor).
+- **LLM for richness, not correctness** — every Gemini call has a deterministic/templated fallback. The pipeline never blocks on a Gemini failure.
+- **Every halt reaches the Report Agent** — halted pipelines still get a Gemini-synthesised narrative and next-best-actions so the member always knows what to do.

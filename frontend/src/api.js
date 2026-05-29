@@ -66,6 +66,28 @@ export function getFileUrl(fileId) {
 }
 
 /**
+ * Download the PDF report for a completed claim. Triggers a browser
+ * download via a temporary <a download> element.
+ */
+export async function downloadClaimReport(claimId) {
+  const base = import.meta.env.VITE_API_URL || ''
+  const res = await fetch(`${base}/api/claims/${claimId}/report`)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || `Report download failed: ${res.status}`)
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `plum_claim_${claimId.slice(0, 8)}.pdf`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+/**
  * Fetch bounding-box regions for an uploaded document.
  * Completely separate from the claim pipeline — only called on user request.
  * Returns {file_id, doc_type, regions: [{field, value, bbox, category}]}

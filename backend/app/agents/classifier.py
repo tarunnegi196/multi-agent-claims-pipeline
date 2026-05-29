@@ -63,8 +63,22 @@ async def classify_node(state: GraphState) -> dict:
     logger.info("[CLASSIFY] start  claim_id=%s  docs=%d", claim_id, len(claim.documents))
 
     for doc in claim.documents:
-        # ── Resolve document type ──────────────────────────────────────────
-        if doc.actual_type:
+        # ── Resolve document type + quality ───────────────────────────────
+        # Priority: real file (Gemini) > stub > filename heuristic.
+        # When a file is on disk, Gemini always runs — stubs are only for
+        # programmatic/test requests that never upload a file.
+        quality = DocumentQuality.GOOD
+
+        if doc.file_path and Path(doc.file_path).exists():
+            from app.providers.gemini_classifier import gemini_classifier
+            file_bytes = Path(doc.file_path).read_bytes()
+            suffix = Path(doc.file_path).suffix.lower()
+            _mime_map = {".pdf": "application/pdf", ".png": "image/png", ".webp": "image/webp"}
+            mime = _mime_map.get(suffix, "image/jpeg")
+            dtype, confidence, quality = await gemini_classifier.classify(doc.file_id, file_bytes, mime)
+            method = "gemini_classifier" if gemini_classifier.is_available() else "gemini_fallback"
+
+        elif doc.actual_type:
             try:
                 dtype = DocumentType(doc.actual_type)
                 confidence = 0.95
@@ -73,27 +87,16 @@ async def classify_node(state: GraphState) -> dict:
                 dtype = DocumentType.UNKNOWN
                 confidence = 0.30
                 method = "stub(invalid)"
-
-        elif doc.file_path and Path(doc.file_path).exists():
-            # Real file — use Gemini classifier
-            from app.providers.gemini_classifier import gemini_classifier
-            file_bytes = Path(doc.file_path).read_bytes()
-            suffix = Path(doc.file_path).suffix.lower()
-            mime = "application/pdf" if suffix == ".pdf" else "image/jpeg"
-            dtype, confidence = await gemini_classifier.classify(doc.file_id, file_bytes, mime)
-            method = "gemini_classifier" if gemini_classifier.is_available() else "gemini_fallback"
+            # Allow explicit quality override from stub (for test cases like TC002)
+            if doc.quality:
+                try:
+                    quality = DocumentQuality(doc.quality.upper())
+                except ValueError:
+                    pass
 
         else:
             dtype, confidence = _classify_by_filename(doc.file_name)
             method = "filename_heuristic"
-
-        # ── Resolve quality ────────────────────────────────────────────────
-        quality = DocumentQuality.GOOD
-        if doc.quality:
-            try:
-                quality = DocumentQuality(doc.quality.upper())
-            except ValueError:
-                pass
 
         classified.append(ClassifiedDoc(
             file_id=doc.file_id,

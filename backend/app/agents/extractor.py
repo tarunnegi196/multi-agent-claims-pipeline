@@ -7,13 +7,19 @@ Extraction priority per document:
   3. GeminiVisionProvider  (file_path set + API key present)
   4. Degraded stub          (simulate_component_failure or no key/file)
 
-After extraction, cross-checks patient names across all documents.
-A mismatch halts the pipeline with a message naming both patients.
+For real-file documents, also captures bounding-box regions in parallel so the
+UI can render them later without an extra Gemini round-trip.
+
+After extraction, cross-checks patient names across all documents (hard halt
+on mismatch) and derives any missing treatment_date / claimed_amount from
+the parsed bill totals + dates.
 
 Publishes every TraceEvent to the event bus for live SSE streaming.
 """
+import asyncio
 import logging
 import time
+from datetime import datetime, date as _date
 from pathlib import Path
 
 from app.models.graph_state import GraphState
@@ -138,10 +144,39 @@ async def extract_node(state: GraphState) -> dict:
         await event_bus.publish(event)
         failed.append("ExtractionAgent(degraded)")
 
+    bbox_regions: dict[str, list[dict]] = {}
+
     for cdoc in classified:
         doc_ref = doc_map.get(cdoc.file_id)
         try:
-            if doc_ref and doc_ref.content:
+            if doc_ref and doc_ref.file_path and Path(doc_ref.file_path).exists():
+                # Real file — always use Gemini Vision; stubs are only for no-file requests.
+                # Fire extraction + bbox calls in parallel so the bboxes are ready when
+                # the UI asks, with no second Gemini round-trip on click.
+                from app.providers.gemini_vision import gemini_vision
+                file_bytes = Path(doc_ref.file_path).read_bytes()
+                suffix = Path(doc_ref.file_path).suffix.lower()
+                _mime_map = {".pdf": "application/pdf", ".png": "image/png", ".webp": "image/webp"}
+                mime = _mime_map.get(suffix, "image/jpeg")
+                extracted, regions = await asyncio.gather(
+                    gemini_vision.extract(cdoc.file_id, cdoc.document_type, file_bytes, mime),
+                    gemini_vision.extract_with_bboxes(cdoc.file_id, cdoc.document_type, file_bytes, mime),
+                    return_exceptions=False,
+                )
+                if regions:
+                    bbox_regions[cdoc.file_id] = regions
+                    # Persist to disk so the /regions endpoint can serve without re-calling Gemini
+                    try:
+                        import json as _json
+                        regions_path = Path(doc_ref.file_path).with_suffix(".regions.json")
+                        regions_path.write_text(_json.dumps({
+                            "doc_type": cdoc.document_type.value,
+                            "regions": regions,
+                        }))
+                    except Exception as _exc:
+                        logger.debug("[EXTRACT] could not cache regions for %s: %s", cdoc.file_id, _exc)
+
+            elif doc_ref and doc_ref.content:
                 extracted = _content_to_extracted(
                     cdoc.file_id, cdoc.document_type, doc_ref.content
                 )
@@ -154,16 +189,6 @@ async def extract_node(state: GraphState) -> dict:
                     patient_name=doc_ref.patient_name_on_doc,
                     extraction_method="patient_name_stub",
                     overall_confidence=0.85,
-                )
-
-            elif doc_ref and doc_ref.file_path and Path(doc_ref.file_path).exists():
-                # Real file — call Gemini Vision
-                from app.providers.gemini_vision import gemini_vision
-                file_bytes = Path(doc_ref.file_path).read_bytes()
-                suffix = Path(doc_ref.file_path).suffix.lower()
-                mime = "application/pdf" if suffix == ".pdf" else "image/jpeg"
-                extracted = await gemini_vision.extract(
-                    cdoc.file_id, cdoc.document_type, file_bytes, mime
                 )
 
             elif claim.simulate_component_failure:
@@ -254,6 +279,7 @@ async def extract_node(state: GraphState) -> dict:
             "halt_message": msg,
             "extraction_confidence": avg_conf,
             "failed_components": failed,
+            "bbox_regions": bbox_regions,
             "trace": events,
         }
 
@@ -265,15 +291,83 @@ async def extract_node(state: GraphState) -> dict:
     await event_bus.publish(event)
 
     avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
+
+    # ── Derive missing claim fields from extraction ──────────────────────────
+    # The simplified UI submits only (member_id, category, documents). We
+    # populate treatment_date and claimed_amount here so downstream nodes have
+    # a complete claim to work with.
+    updated_claim = claim
+    claim_updates: dict = {}
+
+    if claim.claimed_amount is None:
+        # Prefer hospital-bill totals, then pharmacy net_amount, then any bill total
+        billed_total = 0.0
+        for fd in fused_docs:
+            if fd.total_amount:
+                billed_total += float(fd.total_amount)
+            elif fd.net_amount:
+                billed_total += float(fd.net_amount)
+        if billed_total > 0:
+            claim_updates["claimed_amount"] = billed_total
+            events.append(_make_event(
+                claim_id, "extract.derive_amount", TraceStatus.PASS,
+                detail=f"Derived claimed_amount=₹{billed_total:,.0f} from bill totals",
+                confidence=avg_conf,
+            ))
+            await event_bus.publish(events[-1])
+        else:
+            events.append(_make_event(
+                claim_id, "extract.derive_amount", TraceStatus.WARN,
+                detail="Could not derive claimed amount from any document — defaulting to 0",
+            ))
+            await event_bus.publish(events[-1])
+            claim_updates["claimed_amount"] = 0.0
+
+    if claim.treatment_date is None:
+        # Pick the latest valid date among extracted docs (bill > prescription > lab)
+        parsed_dates: list[_date] = []
+        for fd in fused_docs:
+            for raw in (fd.date, fd.sample_date, fd.report_date):
+                if not raw:
+                    continue
+                for fmt in ("%Y-%m-%d", "%d-%b-%Y", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
+                    try:
+                        parsed_dates.append(datetime.strptime(str(raw), fmt).date())
+                        break
+                    except ValueError:
+                        continue
+        if parsed_dates:
+            picked = max(parsed_dates)
+            claim_updates["treatment_date"] = picked
+            events.append(_make_event(
+                claim_id, "extract.derive_date", TraceStatus.PASS,
+                detail=f"Derived treatment_date={picked.isoformat()} from documents",
+                confidence=avg_conf,
+            ))
+            await event_bus.publish(events[-1])
+        else:
+            today = datetime.utcnow().date()
+            claim_updates["treatment_date"] = today
+            events.append(_make_event(
+                claim_id, "extract.derive_date", TraceStatus.WARN,
+                detail=f"Could not derive treatment_date — using today ({today.isoformat()})",
+            ))
+            await event_bus.publish(events[-1])
+
+    if claim_updates:
+        updated_claim = claim.model_copy(update=claim_updates)
+
     elapsed = int((time.time() - t0) * 1000)
     events[-1] = events[-1].model_copy(update={"duration_ms": elapsed})
 
-    logger.info("[EXTRACT] done  claim_id=%s  avg_conf=%.2f  failed=%s  duration=%dms",
-                claim_id, avg_conf, failed or "none", elapsed)
+    logger.info("[EXTRACT] done  claim_id=%s  avg_conf=%.2f  failed=%s  bboxes=%d  duration=%dms",
+                claim_id, avg_conf, failed or "none", len(bbox_regions), elapsed)
     return {
+        "claim": updated_claim,
         "fused_docs": fused_docs,
         "halt": False,
         "extraction_confidence": avg_conf,
         "failed_components": failed,
+        "bbox_regions": bbox_regions,
         "trace": events,
     }

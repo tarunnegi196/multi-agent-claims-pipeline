@@ -120,6 +120,17 @@ async def fraud_node(state: GraphState) -> dict:
             flags.append(f"DOCUMENT_ALTERATION in {fdoc.file_id}")
             fraud_score += 0.3
 
+    # ── 5. Cross-document consistency flags (from ConsistencyAgent) ──────────
+    consistency_flags = state.get("consistency_flags") or []
+    for cflag in consistency_flags:
+        flags.append(f"CROSS_DOC: {cflag}")
+        fraud_score += 0.15
+        events.append(_emit(
+            claim_id, "fraud.cross_doc", TraceStatus.WARN,
+            detail=cflag,
+            rule="cross_document_consistency",
+        ))
+
     fraud_score = min(fraud_score, 1.0)
 
     # force_manual_review if same-day limit breached OR score at threshold

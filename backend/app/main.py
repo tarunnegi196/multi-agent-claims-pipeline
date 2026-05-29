@@ -20,7 +20,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
+from app.api.report import build_pdf
 from app.api.routes import router as extra_router
 from app.config import settings
 from app.db.bus import event_bus
@@ -89,34 +91,55 @@ async def log_requests(request: Request, call_next):
 
 def _build_halt_decision(claim: ClaimSubmission, halt_message: str,
                          intake_ok: bool | None) -> Decision:
-    """Build a Decision when the pipeline halted before the composer ran."""
+    """
+    Build a Decision when the pipeline halted before the composer ran.
+
+    A halt is a legitimate, high-confidence outcome — the system is *certain*
+    that the input cannot be processed. Confidence reflects that certainty
+    (not zero, because we did make a clear judgement).
+    """
+    msg_lower = halt_message.lower()
+    claimed = claim.claimed_amount or 0.0
+
+    # Intake halts → hard REJECTED with high confidence
     if intake_ok is False:
-        if "not registered" in halt_message or "not found" in halt_message:
+        if "not registered" in msg_lower or "not found" in msg_lower:
             reason = RejectionReason.MEMBER_NOT_FOUND
-        elif "minimum" in halt_message:
+        elif "minimum" in msg_lower or "below" in msg_lower:
             reason = RejectionReason.BELOW_MINIMUM_AMOUNT
         else:
             reason = RejectionReason.DOCUMENT_MISMATCH
         return Decision(
             decision_type=DecisionType.REJECTED,
-            claimed_amount=claim.claimed_amount,
+            claimed_amount=claimed,
             rejection_reasons=[reason],
-            confidence=1.0,
+            confidence=0.98,
             explanation=halt_message,
         )
 
-    reason = (
-        RejectionReason.UNREADABLE_DOCUMENT
-        if "re-upload" in halt_message or "quality" in halt_message.lower()
-        else RejectionReason.DOCUMENT_MISMATCH
-    )
+    # Document-stage halts → MANUAL_REVIEW. We are highly confident in the
+    # diagnosis (wrong type, unreadable, patient mismatch) but the member can
+    # remedy by resubmitting — so a human gate, not a hard reject.
+    if "different patients" in msg_lower or "patient name" in msg_lower:
+        reason = RejectionReason.DOCUMENT_MISMATCH
+        note = (
+            "Documents belong to different patients. Re-upload only documents "
+            "for the patient on this claim and resubmit."
+        )
+    elif "re-upload" in msg_lower or "quality" in msg_lower or "unreadable" in msg_lower:
+        reason = RejectionReason.UNREADABLE_DOCUMENT
+        note = "Re-upload a clearer photo or scan and resubmit."
+    else:
+        reason = RejectionReason.DOCUMENT_MISMATCH
+        note = "Upload the required document type(s) and resubmit."
+
     return Decision(
         decision_type=DecisionType.MANUAL_REVIEW,
-        claimed_amount=claim.claimed_amount,
+        claimed_amount=claimed,
         rejection_reasons=[reason],
-        confidence=0.0,
+        confidence=0.92,
         explanation=halt_message,
-        manual_review_note="Resolve the document issue and resubmit to proceed.",
+        manual_review_note=note,
     )
 
 
@@ -127,12 +150,13 @@ async def submit_claim(claim: ClaimSubmission) -> FinalOutput:
     claim_id = claim.claim_id or str(uuid.uuid4())
     t0 = time.time()
 
+    amt_str = f"₹{claim.claimed_amount:.0f}" if claim.claimed_amount else "(to be extracted)"
     logger.info(
-        "[CLAIM-START] claim_id=%s  member=%s  category=%s  amount=₹%.0f  docs=%d  simulate_failure=%s",
+        "[CLAIM-START] claim_id=%s  member=%s  category=%s  amount=%s  docs=%d  simulate_failure=%s",
         claim_id,
         claim.member_id,
         claim.claim_category.value,
-        claim.claimed_amount,
+        amt_str,
         len(claim.documents),
         claim.simulate_component_failure,
     )
@@ -150,6 +174,8 @@ async def submit_claim(claim: ClaimSubmission) -> FinalOutput:
         "trace": [],
         "failed_components": [],
         "extraction_confidence": 1.0,
+        "consistency_flags": [],
+        "bbox_regions": {},
         "halt": False,
         "halt_message": None,
     }
@@ -168,27 +194,33 @@ async def submit_claim(claim: ClaimSubmission) -> FinalOutput:
     if decision is None:
         decision = _build_halt_decision(claim, halt_message, intake_ok)
 
-    # Build doc summaries: use Gemini-classified type where available, fall back to actual_type
-    classified_map = {
-        c.file_id: c.document_type.value
-        for c in result.get("classified_docs", [])
-    }
+    # Build doc summaries: use Gemini-classified type + quality where available
+    classified_by_id = {c.file_id: c for c in result.get("classified_docs", [])}
     doc_summaries = [
         DocumentSummary(
             file_id=d.file_id,
             file_name=d.file_name,
-            doc_type=classified_map.get(d.file_id) or d.actual_type or "UNKNOWN",
+            doc_type=(classified_by_id[d.file_id].document_type.value
+                      if d.file_id in classified_by_id
+                      else (d.actual_type or "UNKNOWN")),
+            quality=(classified_by_id[d.file_id].quality.value
+                     if d.file_id in classified_by_id
+                     else (d.quality or "GOOD")),
             viewable=bool(d.file_path),
         )
         for d in claim.documents
     ]
 
+    # Use the (possibly derived) claim from final state so treatment_date/amount
+    # reflect values extracted from documents when the user didn't provide them.
+    final_claim = result.get("claim") or claim
+    td_str = str(final_claim.treatment_date) if final_claim.treatment_date else "—"
     output = FinalOutput(
         claim_id=claim_id,
         member_id=claim.member_id,
         policy_id=claim.policy_id,
         claim_category=claim.claim_category.value,
-        treatment_date=str(claim.treatment_date),
+        treatment_date=td_str,
         decision=decision,
         trace=result.get("trace", []),
         processing_time_ms=elapsed,
@@ -235,6 +267,42 @@ async def get_claim(claim_id: str) -> FinalOutput:
         raise HTTPException(status_code=404, detail=f"Claim '{claim_id}' not found")
     logger.debug("get_claim: claim_id=%s  decision=%s", claim_id, output.decision.decision_type.value)
     return output
+
+
+@app.get("/api/claims/{claim_id}/report")
+async def download_claim_report(claim_id: str) -> Response:
+    """
+    Generate a PDF report for a completed claim.
+
+    The report bundles the verdict, structured decision Q&A, amount breakdown,
+    processed documents and pipeline trace summary. Suitable for evaluation
+    bundles — one PDF per claim.
+    """
+    repo = ClaimRepository(settings.db_path)
+    output = await repo.get(claim_id)
+    if output is None:
+        raise HTTPException(status_code=404, detail=f"Claim '{claim_id}' not found")
+
+    claim_meta = {
+        "claim_id":         output.claim_id,
+        "member_id":        output.member_id,
+        "policy_id":        output.policy_id,
+        "claim_category":   output.claim_category,
+        "treatment_date":   output.treatment_date,
+    }
+    pdf_bytes = build_pdf(
+        claim_meta=claim_meta,
+        decision=output.decision,
+        documents=[d.model_dump() for d in output.documents],
+        trace=output.trace,
+        processing_ms=output.processing_time_ms,
+    )
+    filename = f"plum_claim_{output.claim_id[:8]}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/health")
